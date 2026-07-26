@@ -1,3 +1,6 @@
+---
+tags: [runbook, coding-pod]
+---
 # Test a PR on the `clinical` Environment
 
 Reference: [How to Test a PR on the Clinical Environment](https://app.notion.com/p/3a61358f13e181f8b956c75ca9c6b2c9)

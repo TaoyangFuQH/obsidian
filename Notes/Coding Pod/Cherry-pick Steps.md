@@ -1,3 +1,6 @@
+---
+tags: [runbook, coding-pod]
+---
 # Cherry-pick a PR to `release` + Verify on Staging
 
 Reference: [Release Process - Automated Deployments and Git Branching](https://app.notion.com/p/3661358f13e1817e8a14fa640be09d02) —
