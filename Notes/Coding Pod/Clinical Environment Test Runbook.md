@@ -8,7 +8,7 @@ Reference: [How to Test a PR on the Clinical Environment](https://app.notion.com
 `clinical` is a **non-production** QH environment (GCP project `qh-clinical`, tenant
 `qhai-com`) that runs the real production-shaped pipeline. Safe to read/write — use it to
 validate a PR against a realistic path **before or without** merging to `develop`/`release`.
-Unlike `release` → `staging` (push-triggered, see [[Cherry-pick Steps]]), `clinical` deploys
+Unlike `release` → `staging` (push-triggered, see [[Cherry-pick Runbook]]), `clinical` deploys
 off a **pointer branch** (`deploy/clinical/<name>`) that you move manually and dispatch by
 hand — no PR or merge required.
 

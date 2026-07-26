@@ -6,8 +6,8 @@ tags: [moc, coding-pod]
 Map of content for the Coding Pod team — runbooks, processes, and references.
 
 ## Runbooks
-- [[Cherry-pick Steps]] — cherry-pick a PR to `release` and verify on staging
-- [[Clinical Environment Test Step]] — test a PR on the `clinical` environment
+- [[Cherry-pick Runbook]] — cherry-pick a PR to `release` and verify on staging
+- [[Clinical Environment Test Runbook]] — test a PR on the `clinical` environment
 
 ## Related
 - [[qh-platform]]
