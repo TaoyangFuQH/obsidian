@@ -1,4 +1,5 @@
 ---
+updated: 2026-07-24
 tags: [runbook, coding-pod]
 ---
 # Test a PR on the `clinical` Environment
@@ -172,7 +173,7 @@ SELECT external_id, (result_json IS NOT NULL) AS done, run_end_time,
 FROM workflows.workflow_run WHERE external_id LIKE '%-<tag>' ORDER BY external_id;
 ```
 
-### Cleanup
+### Cleanup / Rollback
 
 Restore any Phase-2 config to baseline, and restore the pointer branch to its recorded
 rollback SHA if you're done testing. Consider a follow-up note in

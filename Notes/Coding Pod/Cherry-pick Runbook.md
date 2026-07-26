@@ -1,4 +1,5 @@
 ---
+updated: 2026-07-24
 tags: [runbook, coding-pod]
 ---
 # Cherry-pick a PR to `release` + Verify on Staging
@@ -215,6 +216,15 @@ Verified the cherry-pick actually landed (not merged-then-reverted) via:
 ```bash
 git merge-base --is-ancestor 4b720e10648bca37afac233e7c0200f6424fe283 origin/release
 ```
+
+---
+
+## Rollback
+
+- If the cherry-pick is bad after merging to `release`: open a revert PR against
+  `release` (same code-owner approval bar) — don't force-push the branch. Merging
+  the revert re-triggers the staging deploy back to the prior image.
+- Before merge, just close the cherry-pick PR — nothing deployed yet.
 
 ---
 

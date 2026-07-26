@@ -1,6 +1,6 @@
 ---
-tags: [runbook]
 updated: <YYYY-MM-DD>
+tags: [runbook]
 ---
 # <Title — what this runbook accomplishes>
 
