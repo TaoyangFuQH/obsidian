@@ -1,0 +1,2 @@
+- **Hook loop:** trigger, dispatch, and execution are all application code. The model is not involved in whether it runs. Reliability of _firing_ is effectively 100%.
+- **Skill loop:** no matter how deterministically you _write_ the instructions ("ALWAYS do X, then Y, then Z"), the _execution_ of every step passes through the model — loading, noticing, recalling, acting, interpreting. Deterministic text, probabilistic executor. So yes: a skill has a strictly higher probability of being skipped or misapplied than a hook.
