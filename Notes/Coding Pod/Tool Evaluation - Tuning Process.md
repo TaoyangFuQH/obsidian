@@ -3,4 +3,5 @@ Goal: to use human labeled set, and unlabeled set to tine our system, e.g., clin
 
 Input
 - human labeled set: with codes, reasoning of coding(, citations of coding). limited amount
-- unlabeled set: LLM codes, LLM reasoning and LLM citation
+- unlabeled set: LLM codes, LLM reasoning and LLM citations; larger amount than human labeled set; multi-LLM labeling, LLM debeting, LLM
+
