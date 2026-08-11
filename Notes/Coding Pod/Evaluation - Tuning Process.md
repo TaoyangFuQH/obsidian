@@ -1,4 +1,8 @@
-Goal: to use human labeled set, and unlabeled set to tine our system, e.g., clinical coding, ed coding, etc
+Evaluation - tuning process is an important step of iterating a system. The loop is like: 1) data -> eval / tuning -> deploy -> monitoring ; collect new data
+
+Goal: to use human labeled set, and unlabeled set to tine our system, e.g., clinical coding, ed coding, etc.
+
+Non-goal: annotation pipeline to collect labeled set from human labeling
 
 
 Input
@@ -9,8 +13,9 @@ eval / tuning on unlabeled set
 - sanity check from LLM labels
 	- uncertainty check / confidence check: multi-LLM labeling
 	- malformation check, e.g., json format error
+	- cost track
 - LLM debating / LLM auto judging
-	- one LLM labels --> another LLM re-labeling / anothe
+	- one LLM labels --> another LLM re-labeling / judging
 
 
 eval / tuning on human labeled set
