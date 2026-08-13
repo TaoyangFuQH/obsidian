@@ -187,7 +187,7 @@ Ordered by expected yield. Every item makes a rule that already exists in `diagn
 
 ### 1 · Make Q2 an artifact checklist, not a judgement — `references/diagnosis.md` § Mechanism
 Replace "Did the model engage with it? (evidenced from the thinking trace)" with a required read of four fields **per vote**: `output.<axis>_rationale`, `output.narrative` (the `Excluded:` line), `output.detail.<axis>[].source_quote`, `output.thinking`. Add the hard rule: **a NOT-RETRIEVED claim must quote the search term and its zero hit count in `thinking`; a rationale-only read is not an answer to Q2.** Note in-line that clinic runs three votes and they disagree — one vote enforcing a rule the other two ignore is itself the finding (case 68).
-*Prevents miss 1 — 7 of 11 rows, the single largest driver.*
+*Prevents miss 1 — /, the single largest driver.*
 
 ### 2 · Fix the broken cache join and make lane selection mechanical — `references/reproduction.md` § 4
 The ⧗ note currently says `manifest.json:prompt_sha1[<key>]` and `run.json:prompt_fp` "are both sha1 of the same prompt text". They are not — measured on this batch, `3e951ede…` vs `2c93596f…`/`5958c36e…`; they hash different serialisations and the join can never succeed. Replace with the seed-lane rule: **`run_seed S` → cache sigs whose `run.json:seed ∈ {S001, S002, S003}`; seeds 1/2/3 are the dataset-build lane and are *not* what your reproduction saw.** Add the warning that one dataset can hold several materially different assembled prompts (here 84,704 vs 87,274 chars, differing in five substantive rules) and that `prompts_snapshot/<key>_system.txt` is the authoritative text for a run.
