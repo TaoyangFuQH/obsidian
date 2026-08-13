@@ -56,9 +56,13 @@ Full write-up: `features/llm-auto-eval/lane-a-findings.md`. Four confirmed class
 - **ED `washington-402`: 2 encounters billed 99291 on a Moderate-MDM chart.**
   `business_logic.py::check_critical_care` uses `gate1 = copa_level == "High"` (its docstring
   restates that as the rule); `critical_care_prompt.py:10-12` says "Gate 1: MDM = High … **a
-  COPA-High alone is NOT sufficient**". 39 encounters hit the code's gate, 6 diverge, 2 billed.
+  COPA-High alone is NOT sufficient**". 39 encounters hit the code's gate, 6 diverge, 2 billed:
+  **`944376884`** (COPA High / DATA Moderate / RISK Moderate, 37 min) and **`946082827`**
+  (COPA High / DATA Low / RISK Moderate, 37 min), both pro=fac=99291. The other four diverging
+  but not billed: `944167712` `944624102` `944647046` `944768788`.
   Critical-care time is documented in only 3/402, so **two of the three CC bills in the run would
-  not exist under the prompt's own rule.**
+  not exist under the prompt's own rule.** (Ids are recorded here deliberately — `features/` is
+  backed up nowhere, and encounter ids are permitted per `CLAUDE.md`.)
 - **ED: 100 citation spans ≥120 chars with no clause traceable to the input**, across 83/402
   (20.6%) encounters — worst a 418-char "quote".
 - **ED: one count/list arithmetic contradiction** (`tests_ordered_count=2`, three entries) —
