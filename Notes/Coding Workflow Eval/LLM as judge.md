@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-12
+updated: 2026-08-13
 tags: [reference, coding-pod, eval, auto-eval]
 ---
 # LLM auto-eval — detecting coding errors without ground truth
@@ -8,8 +8,78 @@ Companion to [[rca-coding logic]], which reads the same problem from the taxonom
 That note asks *"if we automate the RCA judge, how does the taxonomy constrain it?"*. This
 one asks the prior question: **with no `gt.csv` at all, what can we actually detect?**
 
-Design lives in the repo at `coding-ai-harness/features/llm-auto-eval/plan.md` (local-only
-— `features/` is not tracked, so this note is the durable copy of the reasoning).
+Design lives in the repo under `coding-ai-harness/features/llm-auto-eval/` — `plan.md` (the six
+tiers), `ROADMAP.md` (phases, gates, graveyard), `tier3-metamorphic.md` (finished tier-3 design),
+`lane-a-findings.md` (measured defects), `grounding/` (research + code dossiers). **All of it is
+local-only — `features/` is neither tracked nor synced — so this note is the durable copy of the
+reasoning.**
+
+> **Updated 2026-08-13.** Several claims in the original version were measured and turned out
+> wrong; each is now marked **⚠** in place rather than quietly deleted. Six of them were mine.
+
+## How it fits the loop — a cycle with three lanes, not one line
+
+The obvious reading is a pipeline: `auto-eval → human labelling → rca_coding → fixes`. That is
+right for the *main* lane and wrong about the shape. Two corrections.
+
+**It is a loop, because labels feed backward.** Auto-eval cannot be trusted until it is
+calibrated, and calibration needs labels — so the real shape is: existing labels → calibrate
+detectors → detectors rank → humans label the top of the queue → more labels → better
+calibration. We do not start at zero; it bootstraps off the ~1,609 ED GT rows already on disk.
+This is also why "without ground truth" is the wrong slogan. The achievable goal is **without
+ground truth *at scale*** — a few hundred labels amortised over every future run, rather than
+labels growing with volume.
+
+**Not every finding needs a human.** Three lanes, different path lengths:
+
+| lane | what | path |
+|---|---|---|
+| **A** — no human needed | Deterministic contradictions and metamorphic violations. A prompt that says MDM=High while the code checks COPA=High is a bug on inspection. If paraphrasing a note moves the billed code, that is a defect regardless of which code was right. | auto-eval → **fix** |
+| **B** — the main lane | Judge- and dissent-flagged suspects. Nothing here is self-evidently wrong, so it needs adjudication. | auto-eval → label → `rca_coding` → fix |
+| **C** — routes elsewhere | `upstream-input`: the pipeline was right given what it received. | auto-eval → dataset / extraction fix (`ITERATION.md` stage 1) |
+
+Lane A is why auto-eval can pay for itself before any labelling happens. Lane C is the one an
+LLM judge can never reach — when the signal was never in the note, no verifier, gate or ensemble
+can catch the error, so a judge asked to explain it will invent a prompt fix for a data problem.
+
+**One ordering constraint inside lane B:** `rca_coding` needs *reproduction* first — an error that
+does not reproduce 3/3 is not RCA-able. So the ranking decides which encounters get reproduced,
+which sits upstream of the RCA proper.
+
+**The economics are the whole point.** Human labelling is the expensive step, so the metric that
+matters is errors-found per labelled encounter — **lift over random ordering**, not accuracy.
+
+### Lane A is not hypothetical — measured 2026-08-13
+
+Full write-up: `features/llm-auto-eval/lane-a-findings.md`. Four confirmed classes, no labels used.
+
+- **ED `washington-402`: 2 encounters billed 99291 on a Moderate-MDM chart.**
+  `business_logic.py::check_critical_care` uses `gate1 = copa_level == "High"` (its docstring
+  restates that as the rule); `critical_care_prompt.py:10-12` says "Gate 1: MDM = High … **a
+  COPA-High alone is NOT sufficient**". 39 encounters hit the code's gate, 6 diverge, 2 billed.
+  Critical-care time is documented in only 3/402, so **two of the three CC bills in the run would
+  not exist under the prompt's own rule.**
+- **ED: 100 citation spans ≥120 chars with no clause traceable to the input**, across 83/402
+  (20.6%) encounters — worst a 418-char "quote".
+- **ED: one count/list arithmetic contradiction** (`tests_ordered_count=2`, three entries) —
+  load-bearing, since DATA points derive from the count.
+- **Clinic `patch26`: "Documented Total Time" is marked met on 62/62 encounters** — the flag never
+  varies. `time_level` is empty in 55 of them and the note contains no time reference at all in 43.
+  Clinic's `input.csv` has **no time column**, so the note is the only possible source, and only
+  15/63 notes mention time. Time can set the billed level by itself under the AMA higher-of rule
+  (confirmed live: one encounter at MDM 2 / time 5 → 99215), so a coder-facing report asserting
+  documented time on every chart is an audit exposure. 62/62 constancy points at the
+  `guideline_report` transform rather than a per-encounter model assertion.
+
+**And the lesson that generalises.** Ten candidate detectors: 4 confirmed, 3 clean negatives,
+**3 fired but were the check being wrong, not the pipeline** — COPA=High with all three COPA
+booleans False is *not* a contradiction (`copa_prompt.py:45` reaches High via "condition
+confirmed" or "named differential + workup ordered", neither of which maps to a boolean); clinic
+`mdm_level`-vs-billed-code showed 5 mismatches until the higher-of-MDM-or-time rule was applied,
+then 0. A ~30% false-lead rate on *deterministic* checks — no judge, no sampling noise, just a
+misread rule — is the argument that calibration is not optional even for lane A. All three were
+caught by reading the rule the check claimed to encode. **None would have been caught by running
+on more encounters.**
 
 ## Why bother — the label wall
 
@@ -41,7 +111,7 @@ from human labels, or from PPI (tier 6). Cross this line and the two-artifact co
 | upstream-input missing data | **Keep, demote to deterministic.** No judge needed — a scan of `input.csv` + the assembled model input. Also the one bucket where a judge is *futile*: when the signal was never in the note, no verifier, gate or ensemble can ever catch it. Routes to `ITERATION.md` stage 1. |
 | tool LLM coding uncertainty | **Keep — we already pay for it.** ED records `abstention.pro_votes` (QH + GPT-5.4 + Gemini); clinic runs a 3-vote `clinic-extract` ensemble. Dissent is on disk, unmined, for every run already made. |
 | directly judge which labels are wrong | **The weak link. Demote to last.** This is the holistic reference-free judge, run by the generator's own family. Blinded, cross-family, decomposed and calibrated, or not at all. |
-| decisive-context + conflict detection | **Best idea, under-exploited.** Verification beats generation *for decomposable tasks* — the documented precondition. Coding qualifies: ~40 criterion booleans with citations per encounter in `guideline_report`. |
+| decisive-context + conflict detection | **Best idea, under-exploited.** Verification beats generation *for decomposable tasks* — the documented precondition. **⚠ But the surface is smaller and messier than I first said: 18 booleans in `llm_raw` (copa 3 / data 3 / risk 12), not ~40 — the 40-ish figure was `guideline_report`, a *different*, display-derived surface (61 facility + 17 professional criteria). See tier 4 for why this matters.** |
 
 ## Six tiers, cheapest first
 
@@ -60,9 +130,11 @@ The output already contradicts itself in machine-checkable ways. Each localizes 
 1. **Prompt-vs-code divergence prod already computes and throws away.**
    `run_two_stage_calculations` re-derives DATA points from the LLM's own sub-entity
    counts, compares to the LLM's declared `data_level`, logs
-   `"DATA level mismatch — LLM: %s, computed: %s"`, then uses the computed value. An
-   exact, free detector of the LLM misapplying the DATA table, going to a log nobody
-   reads.
+   `"DATA level mismatch — LLM: %s, computed: %s"`, then uses the computed value.
+   **⚠ Measured yield: 0. Declared and computed agree 402/402 on `washington-402`.** I
+   originally called this the highest-value detector per line of code; it never fires on
+   current behaviour. Build it as a **regression guard**, not as a mining tool, and do not
+   put it at the top of the build order.
 2. **Rule replay on the axes with no recompute.** COPA and RISK are accepted from the LLM
    directly. Re-implement the prompt's decision table over the LLM's *own* booleans and
    compare to its declared level. This is the split the naive design wants: booleans right
@@ -70,10 +142,13 @@ The output already contradicts itself in machine-checkable ways. Each localizes 
    extraction, address is the criterion text. **One detector, two distinct loci.**
 3. **Citation groundedness.** Every `citations[].cited_text` must be a verbatim substring
    of the *assembled* input (rebuild it, or read the request out of `core/modelcache.py`,
-   which stores request bytes content-addressed). Spot-checked one live ED encounter:
-   **2 of 9 cited spans were not substrings** — one a stitched paraphrase presented as a
-   quote. Clinic's ~23 `source_quote` fields are schema-defined as verbatim substrings —
-   same check, bigger surface.
+   which stores request bytes content-addressed). **Measured over all 402 encounters
+   (6,059 spans): 46.9% grounded by exact match, 70.0% whitespace-normalized — so the
+   naive exact check carries a ~23-point false-positive rate and MUST normalize.** The
+   residual **29.8% ungrounded** splits 30.9% stitched / 66.1% absent ≥30 chars / 3.0%
+   short. The best lane-A cut is the 100 spans ≥120 chars with no clause found anywhere
+   (83/402 encounters). Still **UNMEASURED against the cache request bytes**, which is the
+   authoritative target — the figure above is against a reconstruction of the model input.
 4. **Evidence/claim polarity.** Boolean `true` + empty `evidence[k]` = unsupported claim;
    `false` + non-empty evidence = contradiction.
 5. **Internal arithmetic.** `tests_ordered_count` vs `len(tests_ordered)`, ditto external
@@ -114,13 +189,23 @@ The strongest reference-free idea, absent from the naive design. Perturb the inp
 whose correct effect is known a priori; check the output moves as required. No GT, no
 judge, and the result is **causal rather than a self-report**.
 
-- **Invariance** — paraphrase, reorder sections, change name/DOB/provider, strip template
-  noise → the level **must not move**. Any move is a defect, full stop.
+- **Invariance** — paraphrase, reorder sections → the level **must not move**. Any move is a
+  defect, full stop. **⚠ Two of the four perturbations I originally listed are dead:**
+  *strip template noise* — **331 of 6,059 cited spans (5.46%) ARE placeholder lines and 186/402
+  (46.3%) encounters cite one as evidence**, mostly for DATA; they are *negative* evidence for a
+  low rung, so stripping them **should** move the level. I had proposed it as a negative control,
+  which would have made a working apparatus fail its own gate. *change name/DOB/provider* —
+  DOB and provider appear in note text in **0.0%** of encounters, names in 33.3%; exercisable at
+  the structured-field layer only. Section reorder must also exclude ordered pairs
+  (`INITIAL VS` / `LAST VS`, `ED Course`) — reordering those is not meaning-preserving.
 - **Directional monotonicity** — delete the span the model itself called decisive → the
   level must drop or it must cite different support. Add a documented qualifying element →
   must not drop.
-- **Sufficiency** — feed *only* the cited spans. Same level → citations are sufficient.
-  Different → it was using uncited context and the citation set isn't the real basis.
+- **Sufficiency** — feed *only* the cited spans. **⚠ Dead as a binary test: the cited union is a
+  median 3.4% of note characters (p90 7.0%), so keep-only-citations discards ~96.6% of the input
+  and a level change measures OOD-ness, not sufficiency.** Keep the *comprehensiveness* direction
+  instead (delete the rationale, keep the rest) — it perturbs 3.4% and stays in distribution.
+  Both are the ERASER metrics; adopt their names and formulas rather than reinventing.
 
 This is what turns "decisive context" from a claim into a test, and it is the input-level
 analogue of prompt ablation — the only tier below that establishes causation.
@@ -128,7 +213,27 @@ analogue of prompt ablation — the only tier below that establishes causation.
 meaning turns an invariance test into a false positive, and there is no GT to catch it.
 
 ### Tier 4 — decomposed criterion judging · blinded, cross-family
-Judge the ~40 booleans, not the code. Three separate calls; the separation *is* the design:
+
+> **⚠ The premise "judge the criteria and aggregation stays deterministic" is FALSE as stated,
+> and the correction is structural.** Two independent failures:
+> **(i) in the code** — `run_two_stage_calculations` accepts `copa_level` and `risk_level` **as
+> declared** and only re-derives DATA. So criteria → level is deterministic for **one axis of
+> three**. **(ii) in the data** — identical boolean vectors map to *different* declared levels:
+> copa 4 of 8 distinct vectors ambiguous (one maps to all four levels), data 6/9, risk 9/33. The
+> booleans are an incomplete parameterisation; the level also rides on `problem_count`, the
+> counts, `disposition` and free text. Confirmed by the rule text: `copa_prompt.py:45` reaches
+> High via "condition confirmed" or "named differential + workup ordered", and **neither pathway
+> maps to any boolean**.
+> **Consequence:** a judge emitting only booleans **cannot** reconstruct the level, so
+> "every disagreement arrives pre-localized" does not hold for COPA/RISK. Either the judge emits
+> the full field set, or those two axes need the prompt's rule table implemented as code — which
+> makes tier 4 **depend on tier 1's rule replay** rather than stand beside it.
+> Also: base rates are brutal — 6 of the 18 booleans are under 2.5% true and
+> `physical_restraints_used` is **never true in 402 encounters** (nothing to agree about), so
+> kappa collapses and the agreement statistic needs care (Gwet AC1 / Krippendorff).
+
+Judge the **18** criterion booleans, not the code. Three separate calls; the separation *is* the
+design:
 
 1. **Blind extraction** — different family, shown the input and criterion list, **never
    shown our answer**: which criteria does this documentation support, decisive span for
@@ -210,11 +315,21 @@ they are the only ones whose evidence is independent of any model's judgement.
 
 ## Build order
 
-1. Tier 1 detectors **1 + 3 + 6** — highest value per line, zero marginal cost, and #1
-   recovers a signal prod already computes and discards.
-2. Tier 2 dissent mining over runs that already exist.
-3. **Calibrate on the labelled slice before building any LLM tier** — that number decides
-   whether tiers 4–5 are worth building at all.
+Superseded in detail by `features/llm-auto-eval/ROADMAP.md`; the shape:
+
+1. **Lane A first, and it is free** — citation groundedness (normalized), the format guards, the
+   count/list arithmetic, and the three prompt-vs-code findings. Zero model calls, and it has
+   already produced four confirmed defect classes including two live 99291 over-codes.
+2. **Tier 2 dissent mining** over runs that already exist — including clinic's
+   `repro-seed{1,2,3}`, which give K=9 per-vote draws on 63 encounters, already paid for.
+3. **Calibrate before building any LLM tier.** The gating number: `washington-402`'s `gt.csv` is
+   ~82% blank on the level columns — **71 / 72 / 71** labelled rows for copa / data / risk. If
+   that cannot support a usable interval, the right move is **acquire labels**, not build more
+   detectors.
+4. Tier 3 v1 (~10k calls, gated on NULL-1), then tiers 4–5 only if step 3 says they calibrate.
+
+**What I had wrong here originally:** the DATA-mismatch detector was step 1 and yields **0/402**;
+the evidence-polarity check yields **0/589**. Neither mines the current corpus.
 
 ## Research grounding
 
