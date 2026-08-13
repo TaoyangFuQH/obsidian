@@ -93,37 +93,31 @@ decides the tier-4 surface question below.
 
 Original per-instance detail, retained as the measurement record:
 
-- **ED `washington-402`: 2 encounters billed 99291 on a Moderate-MDM chart.**
-  `business_logic.py::check_critical_care` uses `gate1 = copa_level == "High"` (its docstring
-  restates that as the rule); `critical_care_prompt.py:10-12` says "Gate 1: MDM = High … **a
-  COPA-High alone is NOT sufficient**". 39 encounters hit the code's gate, 6 diverge, 2 billed:
-  **`944376884`** (COPA High / DATA Moderate / RISK Moderate, 37 min) and **`946082827`**
-  (COPA High / DATA Low / RISK Moderate, 37 min), both pro=fac=99291. The other four diverging
-  but not billed: `944167712` `944624102` `944647046` `944768788`.
-  Critical-care time is documented in only 3/402, so **two of the three CC bills in the run would
-  not exist under the prompt's own rule.** (Ids are recorded here deliberately — `features/` is
-  backed up nowhere, and encounter ids are permitted per `CLAUDE.md`.)
-- **ED: 100 citation spans ≥120 chars with no clause traceable to the input**, across 83/402
-  (20.6%) encounters — worst a 418-char "quote".
-- **ED: one count/list arithmetic contradiction** (`tests_ordered_count=2`, three entries) —
-  load-bearing, since DATA points derive from the count.
-- **Clinic `patch26`: "Documented Total Time" is marked met on 62/62 encounters** — the flag never
-  varies. `time_level` is empty in 55 of them and the note contains no time reference at all in 43.
-  Clinic's `input.csv` has **no time column**, so the note is the only possible source, and only
-  15/63 notes mention time. Time can set the billed level by itself under the AMA higher-of rule
-  (confirmed live: one encounter at MDM 2 / time 5 → 99215), so a coder-facing report asserting
-  documented time on every chart is an audit exposure. 62/62 constancy points at the
-  `guideline_report` transform rather than a per-encounter model assertion.
+- **ED citation groundedness — the survivor.** 100 spans ≥120 chars with no clause traceable to
+  the input, across 83/402 (20.6%) encounters; worst a 418-char "quote". Spec-backed by
+  `output_format_prompt.py`'s "exact verbatim quote from the note" (×8).
+- ~~ED: 2 encounters billed 99291 on a Moderate-MDM chart~~ — **retracted, see above.** The
+  divergence itself is real and worth recording: `business_logic.py::check_critical_care` gates on
+  `copa_level == "High"` while `critical_care_prompt.py:10-12` says "Gate 1: MDM = High … a
+  COPA-High alone is NOT sufficient". 39 hit the code's gate, 6 diverge (`944167712` `944376884`
+  `944624102` `944647046` `944768788` `946082827`), 2 of those billed 99291 (`944376884`,
+  `946082827`, both 37 min). **But 99291 is time-based, not MDM-gated, so those bills are not
+  over-codes.** Ids kept because `features/` is backed up nowhere and ids are permitted per
+  `CLAUDE.md`.
+- ~~ED count/list arithmetic is load-bearing~~ — **retracted.** `944640641` really does have
+  `tests_ordered_count=2` with three entries, but the code prefers the list length, so DATA points
+  are unaffected.
+- ~~Clinic "Documented Total Time" is an audit exposure~~ — **retracted.** `criteria_met: True` is
+  hardcoded for FE styling (`transform_v1.py:508`), and `level=""` already hides the chip when time
+  is not usable/attributable (QEU-299 / QEU-303). The 43 + 12 id lists in `lane-a-findings.md` are
+  a measurement record, not a defect list.
 
-**And the lesson that generalises.** Ten candidate detectors: 4 confirmed, 3 clean negatives,
-**3 fired but were the check being wrong, not the pipeline** — COPA=High with all three COPA
-booleans False is *not* a contradiction (`copa_prompt.py:45` reaches High via "condition
-confirmed" or "named differential + workup ordered", neither of which maps to a boolean); clinic
-`mdm_level`-vs-billed-code showed 5 mismatches until the higher-of-MDM-or-time rule was applied,
-then 0. A ~30% false-lead rate on *deterministic* checks — no judge, no sampling noise, just a
-misread rule — is the argument that calibration is not optional even for lane A. All three were
-caught by reading the rule the check claimed to encode. **None would have been caught by running
-on more encounters.**
+**And the lesson that generalises.** Ten candidate detectors → **1 confirmed, 3 clean negatives,
+6 that were the check being wrong, not the pipeline.** A **~80% false-lead rate on *deterministic*
+checks** — no judge, no sampling noise, just checks misreading a rule. This is the strongest
+argument available that calibration is not optional even for lane A. Every false lead was killed by
+reading the prompt, the CPT rule, or the transform. **None would have been caught by running on
+more encounters** — which is precisely why "run it on a bigger dataset" is the wrong instinct here.
 
 ## Why bother — the label wall
 
