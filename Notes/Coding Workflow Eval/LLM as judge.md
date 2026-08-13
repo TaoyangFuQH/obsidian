@@ -49,17 +49,37 @@ which sits upstream of the RCA proper.
 **The economics are the whole point.** Human labelling is the expensive step, so the metric that
 matters is errors-found per labelled encounter — **lift over random ordering**, not accuracy.
 
-### Lane A is not hypothetical — but only 1 of 5 candidates survived review
+### Lane A's deterministic half: measured, and it yielded **zero** fixable defects
 
-Full write-up: `features/llm-auto-eval/lane-a-findings.md`. Measured 2026-08-13; **reviewed with the
-domain owner the same day, and four of the five claimed classes died.** Keeping the wreckage here
-because the *reasons* are the transferable part.
+Full write-up: `features/llm-auto-eval/lane-a-findings.md`. Ten detectors over **465 encounters**
+(ED `washington-402` 402 + clinic `patch26` 63), reviewed with the domain owner 2026-08-13.
+**Confirmed defects worth a fix: 0.** Six of the ten detectors fired because *the check misread a
+rule*. Keeping the wreckage because the reasons are the transferable part.
 
-**The one that survives — ED citation groundedness.** `prompts/output_format_prompt.py` requires
-"**exact verbatim quote from the note**" in 8 places, so a `cited_text` that is not a substring of
-the input violates the stated contract by definition, whatever the final code was. **100 spans
-≥120 chars with no clause traceable anywhere, across 83/402 (20.6%) encounters**, worst a 418-char
-"quote". Still UNMEASURED against the cache request bytes, which is the authoritative target.
+What the exercise actually produced: **1 regression guard** (count-vs-list — real, but the code
+prefers the list so it has no consequence), **1 documentation inconsistency** (CC gate: prompt says
+MDM=High, code checks COPA=High — harmless for billing since 99291 is time-based), and **1 design
+work item** (the COPA/RISK schema gap, now Phase 1.5 and the highest-leverage thing on the roadmap).
+
+**This corrects my own claim** that lane A would pay for itself before any labelling. On this
+evidence it does not — the deterministic surface is clean and the payoff sits in **lanes B and C**.
+
+**But lane A is not written off: only its deterministic half has been tested.** Metamorphic
+violations are lane A too — a paraphrase that moves the billed code is a defect needing no label —
+and none of that has run. That is the open question, and what tier 3's ~10k calls buy.
+
+**Citation groundedness — reviewed and dismissed as a product issue.** It is a genuine spec
+violation (`output_format_prompt.py` demands "exact verbatim quote from the note" ×8), with a
+measurable display effect: 244 / 1,356 met criteria render with **no** evidence chip, and 31% of
+failures are *stitched* quotes — two real note fragments joined into a sentence never written, which
+the resolver's fuzzy tier then anchors to the **first fragment only**, so the chip looks right and
+points at the wrong half. But it **does not affect label quality**: accuracy vs GT is
+indistinguishable with and without an unresolvable citation (copa 88% vs 74%, data 78% vs 76%,
+risk 79% vs 85%; cells of 13–58 rows). `cited_text` is emitted beside the level in the same
+completion and never read back — nothing downstream consumes it. **What it does bind is this
+programme:** ~47% of non-verbatim spans fail even the production resolver's three fuzzy tiers
+(exact → first-80 → normalised first-25), so every span-deletion and span-entailment test in
+tiers 3–4 inherits that ceiling.
 
 **The four that died, and why — every one killed by reading a rule, none by more data:**
 
@@ -93,9 +113,9 @@ decides the tier-4 surface question below.
 
 Original per-instance detail, retained as the measurement record:
 
-- **ED citation groundedness — the survivor.** 100 spans ≥120 chars with no clause traceable to
-  the input, across 83/402 (20.6%) encounters; worst a 418-char "quote". Spec-backed by
-  `output_format_prompt.py`'s "exact verbatim quote from the note" (×8).
+- **ED citation groundedness** — 100 spans ≥120 chars with no clause traceable to the input, across
+  83/402 (20.6%) encounters; worst a 418-char "quote". Spec-backed, but **dismissed as a product
+  issue** (see above): no label-quality signal. Kept as a Phase 3–4 ceiling.
 - ~~ED: 2 encounters billed 99291 on a Moderate-MDM chart~~ — **retracted, see above.** The
   divergence itself is real and worth recording: `business_logic.py::check_critical_care` gates on
   `copa_level == "High"` while `critical_care_prompt.py:10-12` says "Gate 1: MDM = High … a
@@ -112,12 +132,13 @@ Original per-instance detail, retained as the measurement record:
   is not usable/attributable (QEU-299 / QEU-303). The 43 + 12 id lists in `lane-a-findings.md` are
   a measurement record, not a defect list.
 
-**And the lesson that generalises.** Ten candidate detectors → **1 confirmed, 3 clean negatives,
-6 that were the check being wrong, not the pipeline.** A **~80% false-lead rate on *deterministic*
-checks** — no judge, no sampling noise, just checks misreading a rule. This is the strongest
-argument available that calibration is not optional even for lane A. Every false lead was killed by
-reading the prompt, the CPT rule, or the transform. **None would have been caught by running on
-more encounters** — which is precisely why "run it on a bigger dataset" is the wrong instinct here.
+**And the lesson that generalises.** Ten candidate detectors → **0 fixable defects, 3 clean
+negatives, 6 that were the check being wrong, not the pipeline**, and 1 real-but-inconsequential.
+A **~80% false-lead rate on *deterministic* checks** — no judge, no sampling noise, just checks
+misreading a rule. This is the strongest argument available that calibration is not optional even
+for lane A. Every false lead was killed by reading the prompt, the CPT rule, or the transform.
+**None would have been caught by running on more encounters** — which is precisely why "run it on a
+bigger dataset" is the wrong instinct here.
 
 ## Why bother — the label wall
 
