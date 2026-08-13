@@ -49,9 +49,49 @@ which sits upstream of the RCA proper.
 **The economics are the whole point.** Human labelling is the expensive step, so the metric that
 matters is errors-found per labelled encounter — **lift over random ordering**, not accuracy.
 
-### Lane A is not hypothetical — measured 2026-08-13
+### Lane A is not hypothetical — but only 1 of 5 candidates survived review
 
-Full write-up: `features/llm-auto-eval/lane-a-findings.md`. Four confirmed classes, no labels used.
+Full write-up: `features/llm-auto-eval/lane-a-findings.md`. Measured 2026-08-13; **reviewed with the
+domain owner the same day, and four of the five claimed classes died.** Keeping the wreckage here
+because the *reasons* are the transferable part.
+
+**The one that survives — ED citation groundedness.** `prompts/output_format_prompt.py` requires
+"**exact verbatim quote from the note**" in 8 places, so a `cited_text` that is not a substring of
+the input violates the stated contract by definition, whatever the final code was. **100 spans
+≥120 chars with no clause traceable anywhere, across 83/402 (20.6%) encounters**, worst a 418-char
+"quote". Still UNMEASURED against the cache request bytes, which is the authoritative target.
+
+**The four that died, and why — every one killed by reading a rule, none by more data:**
+
+- **ED critical-care gate.** I claimed 2 encounters billed 99291 on a Moderate-MDM chart.
+  **Wrong: 99291 is a time-based code** (critically ill + ≥30 min); CPT's MDM two-of-three governs
+  99282–99285, **not** 99291. Not an over-code. The prompt/code divergence is real
+  (`critical_care_prompt.py:10-12` says MDM=High; `business_logic.py` gates on COPA=High) but its
+  only risk is *under*-documentation, which needs GT — so not lane A.
+- **ED count/list arithmetic.** Real inconsistency in the *output*, zero consequence:
+  `_calculate_data_points_from_two_stage` **prefers the list length** over the count field, so the
+  count is vestigial. My "load-bearing" claim was backwards.
+- **ED RISK=High with all 12 booleans False.** `risk_prompt.py` reaches High via pathways (a)–(f)
+  (ICH concern, focal deficit, altered consciousness, mechanism, worsening neuro,
+  anticoagulant+trauma+CT) — **none maps to any boolean.**
+- **Clinic "Documented Total Time".** `transform_v1.py:508` **hardcodes** `criteria_met: True` as a
+  **front-end styling flag**, not an assertion. And the risk I claimed is already handled:
+  `_usable_time_code` demands usable *and* attributable time and sets `level=""` so the FE **hides
+  the chip** (QEU-299 / QEU-303).
+
+**Corrected meta-result: ~80% false-lead rate on hand-built *deterministic* checks** — no judge, no
+sampling noise, just checks misreading a rule. This is the strongest available argument that
+calibration is not optional even for lane A.
+
+**And the finding that outranks all of them.** Three of the four deaths share one cause: **the
+criterion booleans are a lossy decomposition of the coding rules** — COPA and RISK both reach High
+through pathways represented by no boolean, and identical boolean vectors map to different declared
+levels (copa 4 of 8, data 6/9, risk 9/33). One systemic property, not three quirks, and it is what
+decides the tier-4 surface question below.
+
+<!-- superseded first pass: "four confirmed classes" — see verdict table in lane-a-findings.md -->
+
+Original per-instance detail, retained as the measurement record:
 
 - **ED `washington-402`: 2 encounters billed 99291 on a Moderate-MDM chart.**
   `business_logic.py::check_critical_care` uses `gate1 = copa_level == "High"` (its docstring
