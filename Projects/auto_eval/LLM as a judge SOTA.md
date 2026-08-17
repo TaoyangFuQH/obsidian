@@ -5,9 +5,7 @@ tags: [reference, coding-pod, eval, auto-eval, llm-as-judge]
 # SOTA — LLM-as-a-judge, and what each finding does to our design
 
 Companion to [[LLM as judge]], which is the durable copy of the *design* reasoning; this note
-is the literature behind it. The proposal it feeds is
-`coding-ai-harness/features/llm-auto-eval/PROPOSAL.md` (**local-only — `features/` is neither
-tracked nor synced**, so this note is the durable copy of the research).
+is the literature behind it. The proposal it feeds is [[auto eval proposal]].
 
 The earlier `grounding/` dossiers covered *faithfulness*
 (ERASER comprehensiveness/sufficiency, CoT-faithfulness) and *metamorphic testing*; neither
@@ -120,7 +118,7 @@ Read against our own metric set, which already carries QWK and MAE for ordinal a
 - **It can flag a two-rung gap** as almost certainly real.
 - **The binary criterion booleans are the reliable surface** (κ 0.642 vs QWK ~0.55–0.72 on a
   task where chance agreement is much higher). This is independent confirmation, from
-  measurement rather than from principle, that `PROPOSAL.md` §3 WS-C is pointed at the right
+  measurement rather than from principle, that [[auto eval proposal]] §3 WS-C is pointed at the right
   layer — and it raises the stakes on **C0** (completing the COPA/RISK schemas), because
   binary criteria are only useful if they determine the level.
 
@@ -130,7 +128,7 @@ Four more AutoRubric results, each with a direct consequence:
 conflation, and — the part that matters for us — makes **per-criterion κ** computable, so you
 can find out *which* criteria are unreliable rather than getting one uninterpretable number.
 Disagreements concentrated in **subjective constructs (27.9%)** vs **factual ones (14–15%)**.
-⇒ ours: this is the empirical basis for `PROPOSAL.md` C5 (exclude criteria two coders would
+⇒ ours: this is the empirical basis for [[auto eval proposal]] C5 (exclude criteria two coders would
 routinely disagree on) — and it gives us the statistic to *identify* them instead of guessing.
 
 **Same-model ensembles are nearly worthless for strong judges.** Full mitigation stack lifted
@@ -230,7 +228,7 @@ machinery we already have:
 - The **abstention gate** already exists in both products (ED registered-but-off; clinic
   landed in prod). Prod already believes in "decline rather than answer badly." Selective
   judging is the same idea applied to the *evaluator*.
-- The output is exactly the operating point `PROPOSAL.md` asks for — "flag the top k%, catch
+- The output is exactly the operating point [[auto eval proposal]] asks for — "flag the top k%, catch
   ≥X%, 90% confidence" — but with a *human-agreement* guarantee rather than an error-rate
   guarantee, which is the more defensible claim when the alternative to the judge is a coder.
 - Simulated Annotators needs **multiple human annotators per instance**. We have single-labeler
@@ -238,7 +236,7 @@ machinery we already have:
   itself a result:** the cheap confidence estimator in the literature assumes annotator
   diversity we have not collected, and our 3-vote / cross-family dissent (WS-A3) is the
   closest substitute we own.
-- 500 calibration instances vs our 71 per axis. Same wall as `PROPOSAL.md` §3.1, reached from
+- 500 calibration instances vs our 71 per axis. Same wall as [[auto eval proposal]] §3.1, reached from
   a different direction — which is corroboration, not coincidence.
 
 Adjacent work worth a look if we pursue this: margin-adaptive confidence ranking, conformal
@@ -358,7 +356,7 @@ the artifact contract.
 
 ## 8 · Agreement statistics — and a refinement of what I wrote earlier
 
-**⚠ Refinement.** `PROPOSAL.md` §3 WS-B3 says "Gwet AC1 / Krippendorff, **not** Cohen's κ."
+**⚠ Refinement.** [[auto eval proposal]] §3 WS-B3 says "Gwet AC1 / Krippendorff, **not** Cohen's κ."
 That is too strong. The literature is real but two-sided:
 
 - The **kappa paradox** is real: with a dominant class, expected chance agreement `Pe` becomes
@@ -400,7 +398,7 @@ reader cannot tell a reliable criterion from an unbalanced one. For ordinal axes
 | 11 | Verdict-balanced few-shot is the single biggest lever (−15pp when removed) | Mandatory given 6/18 criteria under 2.5% base rate |
 | 12 | Kappa paradox at low prevalence | Report raw agreement + κ + AC1 + prevalence together; QWK for ordinals |
 
-**The one addition to `PROPOSAL.md` I would make on the strength of this:** insert a
+**The one addition to [[auto eval proposal]] I would make on the strength of this:** insert a
 **WS-B0 — the calibration/sensitivity protocol (§2)** ahead of everything else in WS-B. It
 costs a few hundred judge calls on already-labelled encounters, needs no new labels, and its
 C1/C2 gap is a genuine kill switch: a judge that accepts known-wrong ED codings at a
