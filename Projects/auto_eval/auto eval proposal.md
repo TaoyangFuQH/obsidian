@@ -8,12 +8,12 @@ Consolidated, decision-ready. The layer above the design docs — what we are tr
 the three things worth building, and the concerns that bound all of it. Literature behind it:
 [[LLM as a judge SOTA]]. Design reasoning: [[LLM as judge]].
 
-**Supersedes nothing.** The detail stays in the repo under
-`coding-ai-harness/features/llm-auto-eval/` — `plan.md` (the six tiers and their rationale),
-`ROADMAP.md` (phasing, gates, and the graveyard of measured-dead ideas),
-`tier3-metamorphic.md`, `tier4-criterion-judging.md`, `lane-a-findings.md` and `grounding/`.
-**That directory is neither tracked nor synced**, so those six documents are backed up
-nowhere; this note and the SOTA note are the durable copies of the reasoning.
+**Supersedes nothing.** Phasing, gates and the graveyard of measured-dead ideas are in
+[[auto eval roadmap]]; the measured defect classes are in [[lane A findings]]. Three design
+docs remain in the repo at `coding-ai-harness/features/llm-auto-eval/` — `plan.md` (the six
+tiers and their rationale), `tier3-metamorphic.md`, `tier4-criterion-judging.md` — plus
+`grounding/` (four research + code dossiers). **That directory is neither tracked nor
+synced**, so those four are backed up nowhere.
 
 Written 2026-08-17. Two inputs are new since the earlier docs: **the 2026 LLM-as-judge
 methodology literature** (the earlier `grounding/` covered faithfulness and metamorphic
