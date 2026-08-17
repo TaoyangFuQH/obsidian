@@ -25,7 +25,8 @@ exists in this repo on an unmerged branch**.
 > ordinal-vs-binary judge reliability split (which makes a *level* judge unable to adjudicate
 > a one-rung disagreement — see §3 WS-C), and a softening of the "AC1 not κ" rule in WS-B3.
 > It also adds one workstream item this document does not have: **WS-B0**, the
-> calibration/sensitivity protocol, which is runnable today on the labels we already own.
+> calibration/sensitivity protocol — now specced concretely in
+> [[judge calibration protocol]], and runnable today on the labels we already own.
 
 ---
 

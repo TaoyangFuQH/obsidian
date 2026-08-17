@@ -399,7 +399,8 @@ reader cannot tell a reliable criterion from an unbalanced one. For ordinal axes
 | 12 | Kappa paradox at low prevalence | Report raw agreement + κ + AC1 + prevalence together; QWK for ordinals |
 
 **The one addition to [[auto eval proposal]] I would make on the strength of this:** insert a
-**WS-B0 — the calibration/sensitivity protocol (§2)** ahead of everything else in WS-B. It
+**WS-B0 — the calibration/sensitivity protocol (§2)** ahead of everything else in WS-B. Specced in
+[[judge calibration protocol]]. It
 costs a few hundred judge calls on already-labelled encounters, needs no new labels, and its
 C1/C2 gap is a genuine kill switch: a judge that accepts known-wrong ED codings at a
 material rate cannot rank a queue either, and we would know that before writing any of WS-C.
