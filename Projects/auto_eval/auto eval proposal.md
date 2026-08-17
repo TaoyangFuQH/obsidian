@@ -8,12 +8,12 @@ Consolidated, decision-ready. The layer above the design docs — what we are tr
 the three things worth building, and the concerns that bound all of it. Literature behind it:
 [[LLM as a judge SOTA]]. Design reasoning: [[LLM as judge]].
 
-**Supersedes nothing.** Phasing, gates and the graveyard of measured-dead ideas are in
-[[auto eval roadmap]]; the measured defect classes are in [[lane A findings]]. Three design
-docs remain in the repo at `coding-ai-harness/features/llm-auto-eval/` — `plan.md` (the six
-tiers and their rationale), `tier3-metamorphic.md`, `tier4-criterion-judging.md` — plus
-`grounding/` (four research + code dossiers). **That directory is neither tracked nor
-synced**, so those four are backed up nowhere.
+**Supersedes nothing.** The detail is all in this folder now: [[auto eval plan]] (the six
+tiers and their rationale) · [[auto eval roadmap]] (phasing, gates, and the graveyard of
+measured-dead ideas) · [[lane A findings]] (measured defect classes) ·
+[[tier 3 metamorphic]] · [[tier 4 criterion judging]] · [[LLM as a judge SOTA]].
+Only `grounding/` (four research + code dossiers) is still in the repo at
+`coding-ai-harness/features/llm-auto-eval/`, **which is neither tracked nor synced.**
 
 Written 2026-08-17. Two inputs are new since the earlier docs: **the 2026 LLM-as-judge
 methodology literature** (the earlier `grounding/` covered faithfulness and metamorphic
@@ -142,7 +142,7 @@ not as an accuracy measurement on this surface." **Both rank and localize. Neith
 ## 3 · Approaches
 
 Three workstreams. A and B can run in parallel; C is gated on both. The sequencing is the
-recommendation — the tier taxonomy in `plan.md` stays as the design detail.
+recommendation — the tier taxonomy in [[auto eval plan]] stays as the design detail.
 
 ### WS-A · Recover what is already on disk — zero new model calls
 
@@ -243,7 +243,7 @@ inherit that asymmetry. Mitigate position bias by swapping and averaging.
 
 ### The metamorphic lane — designed, unrun, and worth reframing
 
-`tier3-metamorphic.md` is a finished design (~10k calls, ~12–20h serialized). It is the only
+[[tier 3 metamorphic]] is a finished design (~10k calls, ~12–20h serialized). It is the only
 lane whose evidence is **independent of any model's judgement**, which is why it is worth
 keeping. But its expected yield should be stated honestly: `rcm-format-notes` reproduces a
 byte-identical formatted note in only **23/402 (5.7%)** re-runs, and on exactly those 23 the
@@ -335,7 +335,7 @@ prompt it judges is out of date, and the artifact contract should enforce that.
    and a measured catch rate, plus defect classes that enter `ITERATION.md` stage 3 through
    the existing `causes.json` door. Not an accuracy number.
 
-**Artifact contract** (unchanged from `plan.md`, restated because it is what makes this
+**Artifact contract** (unchanged from [[auto eval plan]], restated because it is what makes this
 auditable): `<run-dir>/autoeval/findings.json` mirrors `core.dump_errors` rows minus the GT
 columns, plus `{detector, tier, score, evidence, changes_output}`; every row carries a
 disposition prior from the existing closed set (`system` | `upstream-input` |

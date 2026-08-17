@@ -11,8 +11,8 @@ that, if it fails, stops the phase rather than degrading it silently.
 The layer above this is [[auto eval proposal]] (goals, workstreams, concerns); the literature is
 [[LLM as a judge SOTA]]; measured defect classes are [[lane A findings]]; design reasoning is
 [[LLM as judge]]. Still in the repo under `coding-ai-harness/features/llm-auto-eval/`:
-`plan.md` (the six tiers, the rationale) · `tier3-metamorphic.md` (tier 3, finished, with its own
-V1/V2/V3 line) · `tier4-criterion-judging.md` · `grounding/` (four research + code dossiers, one
+[[auto eval plan]] (the six tiers, the rationale) · [[tier 3 metamorphic]] (tier 3, finished, with its own
+V1/V2/V3 line) · [[tier 4 criterion judging]] · `grounding/` (four research + code dossiers, one
 measured feasibility scan).
 
 > **⚠ Read against [[LLM as a judge SOTA]] before acting on Phase 4.** Two findings there
@@ -179,7 +179,7 @@ an uncalibrated detector cascade is a pile of unfalsifiable opinions.
 
 ## Phase 3 — tier 3, metamorphic testing
 
-Full design and cut line in `tier3-metamorphic.md`. **~10k calls, ~12–20 h serialized, one
+Full design and cut line in [[tier 3 metamorphic]]. **~10k calls, ~12–20 h serialized, one
 MR-week.** **[crit]**
 
 | step | item | provenance |
