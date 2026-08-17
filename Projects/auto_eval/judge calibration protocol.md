@@ -10,6 +10,48 @@ have never asked: **is a judge model competent on ED MDM at all?**
 
 Feeds [[auto eval proposal]] WS-B; gates [[tier 4 criterion judging]].
 
+## What this stage is for — and what it is NOT for
+
+**It is a screening instrument for the judge *model*. It is not a tuning loop for the judge
+*prompt*.** Getting this backwards is the main way the step gets ruined, so it is stated first.
+
+Four goals, in order:
+
+1. **Disqualify incompetent judges** before anything is spent on WS-C. This is the primary
+   purpose. In the source paper this is exactly how the protocol is used — a judge that
+   accepted ~60% of known-wrong answers was thereby ruled out for reference-free use on that
+   task. Nothing was tuned; a model was rejected.
+2. **Produce `q₀` and `q₁`** — the judge's specificity and sensitivity. These are not merely
+   diagnostic: they are the **parameters of the reporting estimator**
+   `θ̂ = (p̂ + q̂₀ − 1)/(q̂₀ + q̂₁ − 1)` ([[LLM as a judge SOTA]] §6). Without them no
+   judge-derived number can be reported honestly. This stage is where that estimator gets its
+   inputs.
+3. **Localize the failure** — separate *judge incompetent* from *prompt broken* from *task not
+   decidable from the note*. The `CANNOT_ASSESS` rate isolates the third, which is an
+   `upstream-input` finding rather than a judge finding.
+4. **Quantify self-preference** — the Claude arm against the cross-family arms.
+
+### Where prompt work legitimately enters, and where it becomes Goodhart
+
+| | verdict |
+|---|---|
+| **Fixing a broken prompt** — `accept(C1)` is low, so the judge is rejecting *correct* codings; cause is likely a prompt bug (wrong rubric text, missing level definitions, ambiguous instruction) | **legitimate.** This is debugging an apparatus |
+| **Tuning wording to maximize the C1−C2 gap** | **not legitimate.** Iterate against these 71 rows and they become in-sample; accept rates stop measuring judge competence and start measuring prompt fit to 71 charts — and those inflated `q₀`/`q₁` then feed the estimator and produce a confidently wrong number |
+
+Same rule [[auto eval proposal]] §4 C-7 applies one level down (*gating detectors are frozen
+and version-pinned; iteration detectors are separate*), applied here to the judge itself.
+
+**So the protocol needs a dev/holdout split.** Iterate the prompt on a dev slice; measure the
+*reported* calibration on a frozen holdout the prompt never saw. This is a third argument for
+starting on `pro`: at n=400 a 100 dev / 300 holdout split is affordable. At n≈71 per MDM axis
+neither half is — which is itself worth knowing, because **any prompt iteration on the MDM
+axes burns the only labels we have.**
+
+Freeze the judge prompt before touching the holdout, and version-pin it with the fingerprint
+from `core/prompt_source.py`, so the calibration entry records which prompt it belongs to. **A
+`calibration.json` whose prompt hash does not match the prompt in use is stale by
+construction.**
+
 ## Why this first
 
 It is the only step that is **cheap, runnable today, and capable of killing the programme.**
