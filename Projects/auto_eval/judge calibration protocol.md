@@ -374,3 +374,78 @@ Two caveats our own tier-4 measurement already established, which bound Stage 2:
 - **15 of the 18 booleans do not feed the level computation at all.** So a criterion conflict
   buys a prompt address but **not** a corrected code — until **C0** (the COPA/RISK schema
   completion) lands. See [[tier 4 criterion judging]] § C.
+
+---
+
+# Computing the ranking weights
+
+Referenced from Stage 3 above ("reliability-weighted conflict count"). This is how that weight
+is actually calculated, and it includes one quantity that **cannot** be estimated without
+labels — stated plainly rather than fudged.
+
+## Functional form
+
+A conflict is evidence, so weigh it as a **log likelihood ratio**. For criterion `c`:
+
+    w(c) = log [ P(conflict | we are wrong) / P(conflict | we are right) ]
+                        detection d_c              false alarm e_c
+
+    encounter score = Σ w(c)  over the criteria that conflicted
+
+That is a Naive-Bayes log-odds sum, and it is what the Dawid–Skene label model
+([[auto eval proposal]] tier 6 / 6.1) reduces to once per-detector error rates are known.
+
+## The denominator `e_c` — computable today, no labels
+
+A spurious conflict can be manufactured by noise on **either** side, and both sides are
+measurable without ground truth:
+
+| term | what it is | source |
+|---|---|---|
+| `s_c` | **our** self-flip rate on criterion `c` across seeds | clinic `repro-seed{1,2,3}` already gives **K=9 on 63 encounters**; [[tier 4 criterion judging]] already measured **10.2%** and **18.0%** on two criteria |
+| `j_c` | **judge** instability on `c` | arm A vs a repeat arm A call, and arm A vs arm B. Pure judge noise, needs no GT |
+
+Assuming the two noise sources are independent:
+
+    e_c = 1 − (1 − s_c)(1 − j_c)   ≈  s_c + j_c   for small values
+
+Worked, using the two real measured `s_c` values:
+
+| criterion | `s_c` | `j_c` (assumed) | `e_c` | relative weight `log(0.7 / e_c)` |
+|---|---|---|---|---|
+| a stable criterion | 0.02 | 0.05 | 0.069 | **2.31** |
+| `behavioral_health_safety_assessment` | **0.18** | 0.10 | **0.262** | **0.98** |
+
+A conflict on the stable criterion carries **~2.4× the evidence**. And read the second row
+directly: **~26% of conflicts on that criterion are manufactured by noise alone.** That is the
+concrete reason unweighted conflict counting ranks by instability rather than by error.
+
+## The numerator `d_c` — the wall
+
+`P(conflict | we are wrong)` is the judge's true detection rate on criterion `c`, and it
+**cannot be estimated without criterion-level labels.** `gt.csv` labels *levels and codes*, not
+the 18 booleans. Three options, increasing cost:
+
+| option | what it gives | verdict |
+|---|---|---|
+| **Hold `d_c` constant** across criteria → `w(c) = −log(e_c) + const` | a purely noise-discounted ranking | **the honest v1.** Computable today, no labels, and it fixes the actual defect |
+| **Borrow `q₁`** from the Stage-1 level calibration as a prior | per-criterion `d_c` under an assumption | cheap and weak — state the assumption, do not hide it |
+| **Adjudicate a sample of conflicts** with a coder | a measured `d_c` | the real fix, and **far cheaper than labelling encounters** — a coder looks only at flagged criteria, not whole charts. ~50 adjudications per high-volume criterion |
+
+Note the third row is the *cheap* label ask that [[auto eval proposal]] §3.1 asks for, arriving
+by a different route: adjudicating conflicts is stratified label acquisition, concentrated
+exactly where information is highest.
+
+## Two corrections that are not optional
+
+**Smoothing.** Six of eighteen criteria have base rates under 2.5% — ~10 positives in 402
+encounters — so a raw per-criterion `s_c` or `j_c` is noise. Shrink toward the pooled rate
+(empirical Bayes, or Laplace as a floor) and **print the per-criterion `n` beside the weight**,
+same discipline as the prevalence-beside-κ rule in [[LLM as a judge SOTA]] §8.
+
+**Independence is false.** Log-odds summing assumes criteria fail independently. They do not:
+the groundedness and entailment checks co-fire by construction, and criteria within one axis
+share a single note-reading step. Unmitigated, this over-counts precisely where several
+criteria trip together — the failure [[auto eval proposal]] §3 tier 6.1 already names. Mitigate
+by capping the per-axis contribution, or by grouping correlated criteria and counting the group
+once.
