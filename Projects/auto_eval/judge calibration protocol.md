@@ -29,7 +29,8 @@ Four goals, in order:
 3. **Localize the failure** — separate *judge incompetent* from *prompt broken* from *task not
    decidable from the note*. The `CANNOT_ASSESS` rate isolates the third, which is an
    `upstream-input` finding rather than a judge finding.
-4. **Quantify self-preference** — the Claude arm against the cross-family arms.
+4. **Quantify self-preference** — the Claude arm against the cross-family arms, on
+   **pass 1b** items (see § Judge arms; pass 1a measures leniency, not self-preference).
 
 ### Where prompt work legitimately enters, and where it becomes Goodhart
 
@@ -144,11 +145,23 @@ ED's generator is `claude-sonnet-4-6`, so:
 | B | **Gemini-2.5-pro** (`VERTEX_PROJECT` + ADC) | second cross-family judge, different provider |
 | C | **Claude** (same family as generator) | **the self-preference measurement** |
 
-Arm C is not a candidate judge — it is the instrument that *quantifies* the bias. The gap
-between arm C and arms A/B on identical items is our own estimate of the self-preference
-effect that [No Free Labels](https://arxiv.org/html/2503.05061v1) measures as an inflated
-false-positive rate. We have never measured it on our surface, and clinic's design depends
-on the answer.
+Arm C is not a candidate judge — it is an instrument.
+
+**⚠ But be precise about what it measures.** C1/C2 items are built from **GT levels**, not from
+our pipeline's output, so comparing arm C against A/B on them measures **leniency**, not
+self-preference. Self-preference is specifically *inflated credit for its own output*, and
+measuring it needs items that **are** our predictions.
+
+So Stage 1 has **two passes**, and the second is what the earlier drafts were missing:
+
+| pass | items built from | measures |
+|---|---|---|
+| **1a** | GT + synthetic rung perturbations | **discrimination and leniency** — is the judge competent at all |
+| **1b** | our pipeline's *own* predicted levels on the same encounters | **self-preference** — arm C's accept rate vs arms A/B on identical items |
+
+Pass 1b is cheap (one item per encounter per arm, ~71×3 per axis) and it is the only one that
+speaks to the [No Free Labels](https://arxiv.org/html/2503.05061v1) finding. We have never
+measured it on our surface, and clinic's design depends on the answer.
 
 Both verifier keys already exist and `ed/verifiers.py` already calls both providers, so the
 data path and the PHI review for it are precedent, not new.
@@ -158,7 +171,17 @@ data path and the PHI review for it are precedent, not new.
 - **Accept rate per condition**, paired by encounter (the same encounter appears in C1 and
   every applicable C2 stratum), so use **McNemar / paired bootstrap**, not two independent
   proportions.
-- **Calibration gap = accept(C1) − accept(C2ₛ)** per stratum s. This is the headline.
+- **Calibration gap = accept(C1) − accept(C2ₛ)** per stratum s. **This is the headline, and a
+  raw accept rate on its own is meaningless.** A judge that answers SUPPORTED to everything
+  scores 100% on C1 and is worthless; it will also score ~100% on every C2 stratum. Read the
+  columns *against each other*, never the C1 column alone. High C1 + high C2 = **lenient**,
+  not good.
+- **`q₀` is stratum-specific and must not be collapsed carelessly.** Specificity
+  `q₀ = P(reject | wrong)` depends on *how* wrong the shown level is — it may be ~0.3 at one
+  rung and ~0.95 at two. Either report `q₀` per rung distance, or compute a single `q₀`
+  **weighted by how often our pipeline actually errs by one rung vs two**, read off the
+  rung-distance distribution in the scoring output. Feeding one unweighted `q₀` into
+  `θ̂ = (p̂ + q̂₀ − 1)/(q̂₀ + q̂₁ − 1)` misstates the correction.
 - **Bootstrap resamples encounters**, and a resampled encounter brings all its conditions —
   the invariant `scripts/metrics_selftest.py` already locks. Do not resample judge calls.
 - **Report raw agreement + Cohen's κ + Gwet's AC1 + marginal prevalence together**, per
@@ -178,7 +201,8 @@ Written down first so the result cannot be rationalized afterwards:
 | `accept(C1)` is low | the judge rejects *correct* codings — it will bury the queue in false flags; the rubric prompt is wrong before the judge is |
 | `accept(C2 +1)` ≈ `accept(C1)` | judge cannot resolve one rung — **exactly AutoRubric's ordinal finding.** Level judging is dead; go to the binary criterion surface, which makes **C0** (the COPA/RISK schema completion) the critical path |
 | `CANNOT_ASSESS` rate is high | either the rubric is not decidable from the note (an `upstream-input` finding, valuable on its own) or the prompt is unclear |
-| arm C ≫ arms A/B | self-preference confirmed on our surface; **clinic must not use a Claude judge** |
+| arm C ≫ arms A/B **on pass 1b** | self-preference confirmed on our surface; **clinic must not use a Claude judge** |
+| the winning arm's gap is within ~12pp of a rival's | **at n≈71 that is noise, not a ranking.** Do not declare a winner — run both cross-family arms and use their agreement |
 
 Note that three of these five outcomes are *useful findings* rather than failures. That is
 the property that makes this the right first step.
@@ -245,3 +269,108 @@ already does this for its verifiers, so the path is precedent — but note two s
 Smoke-test on ~20 encounters × arm A × all conditions before the full set — the point is to
 catch a broken prompt or auth path, not to save money. Then run `pro` (n=400) across all three
 arms, because it has the power; the MDM axes follow and are read as suggestive at n≈71.
+
+---
+
+# The minimal end-to-end run, for ED
+
+One encounter threaded through, so the shape is concrete. Two stages: **prove the judge works,
+then use it.** Encounter `944069156` — GT `risk = moderate`, `copa = moderate`, `data = none`,
+`pro = 99284`.
+
+## Stage 1 — calibrate (labelled data only, no pipeline output needed)
+
+For each of the 71 encounters with a `gt_risk_level`, nudge the GT level up and down. For
+`944069156` (GT = moderate) that is four items:
+
+| item | level shown | truth | judge should say |
+|---|---|---|---|
+| C1 | moderate | correct | SUPPORTED |
+| C2+1 | high | wrong — over-code | NOT_SUPPORTED |
+| C2−1 | low | wrong | NOT_SUPPORTED |
+| C2−2 | minimal | very wrong | NOT_SUPPORTED |
+
+(`C2+2` is out of range from moderate, so it is dropped — not invented.)
+
+Each item is one blinded call: *note + RISK rubric + "is there documented support for
+RISK = high?"* The judge never sees GT, our prediction, or which condition it is in.
+
+**Measured item counts** across the three MDM axes, verified against `gt.csv`:
+
+| axis | labelled | items | C1 | C2+1 | C2−1 | C2+2 | C2−2 |
+|---|---|---|---|---|---|---|---|
+| copa | 71 | 284 | 71 | 57 | 71 | 14 | 71 |
+| data | 72 | 283 | 72 | 58 | 70 | 26 | 57 |
+| risk | 71 | 297 | 71 | 61 | 71 | 25 | 69 |
+| **total** | | **864** | | | | | |
+
+864 items × 3 arms = **2,592 calls** for pass 1a. One afternoon.
+
+Then read the accept rates — ⚠ **illustrative, not measured**:
+
+| arm | C1 | C2+1 | C2−1 | C2−2 | **gap (C1 − C2+1)** |
+|---|---|---|---|---|---|
+| GPT-5.4 | 88% | 71% | 34% | 6% | 17pp |
+| Gemini | 84% | 65% | 29% | 9% | 19pp |
+| Claude | 93% | 86% | 51% | 12% | **7pp** |
+
+**Read the gap, never the C1 column.** Claude has the *highest* C1 and is the *worst* judge
+here — it accepts more of everything, which is leniency, not competence. And 17pp vs 19pp is
+inside the ~12pp noise band at this n, so the honest conclusion is **"either cross-family arm,
+not Claude"**, not "GPT-5.4 wins".
+
+Three decisions come out, and none of them is a tuned prompt:
+
+1. **Use a cross-family arm** (GPT-5.4 and/or Gemini), never Claude.
+2. **Do not ask for levels.** C2+1 at 65–71% means a one-rung over-code slips through two times
+   in three — AutoRubric's ordinal finding, reproduced on our data.
+3. **Keep `q₁ ≈ 0.88` and `q₀` per rung distance** (≈0.29 at one rung, ≈0.94 at two) for the
+   reporting estimator.
+
+## Stage 2 — use the judge on the surface that survived
+
+Levels are out, so drop to the **criterion booleans** — the layer AutoRubric measured at
+κ 0.642. This runs on any encounter, labelled or not. For `944069156` our pipeline emitted,
+among the 18:
+
+    prescription_drug_management         = true
+    controlled_substance_iv             = false
+    life_or_function_threatening         = false
+    behavioral_health_safety_assessment  = true
+
+Ask the cross-family judge **one blinded call per criterion** — note + that single criterion's
+definition, never our answer — then diff:
+
+| criterion | ours | judge (blind) | |
+|---|---|---|---|
+| prescription_drug_management | true | true | agree |
+| controlled_substance_iv | false | false | agree |
+| life_or_function_threatening | false | false | agree |
+| behavioral_health_safety_assessment | true | **false** | ← **conflict** |
+
+That conflict is the output, and it has an **address**: encounter `944069156`, node
+`ed-risk-questionnaire`, field `behavioral_health_safety_assessment`, plus the span the judge
+did and did not find. That is something a prompt owner can act on — unlike "this encounter
+looks wrong".
+
+## Stage 3 — what ships
+
+Rank all 402 encounters by **reliability-weighted** conflict count, hand a coder the top ~15%,
+and state the operating point: *"flagged 60 encounters; judge sensitivity 0.88, specificity
+0.29 at one rung on the held-out calibration set; lift over random ordering = X."*
+
+## Why Stage 1 cannot be skipped
+
+Without it, Stage 2 still runs and still emits a tidy conflict list — you simply cannot tell
+whether a conflict is our error or the judge's. Stage 1 is what earns the sentence "GPT-5.4
+disagreeing on this criterion means something", and it is what stops you building the
+level-judge that the calibration proves cannot work.
+
+Two caveats our own tier-4 measurement already established, which bound Stage 2:
+
+- **Our booleans self-flip 10–18% across reruns** on some criteria
+  (`behavioral_health_safety_assessment` at 18.0%), so part of any conflict is our own
+  instability rather than an error. Rank on conflict *net of* self-flip rate.
+- **15 of the 18 booleans do not feed the level computation at all.** So a criterion conflict
+  buys a prompt address but **not** a corrected code — until **C0** (the COPA/RISK schema
+  completion) lands. See [[tier 4 criterion judging]] § C.
