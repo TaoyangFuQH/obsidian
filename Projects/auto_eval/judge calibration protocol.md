@@ -260,6 +260,73 @@ judge whether the budget is well chosen.
 
 ---
 
+## Applying the calibrated method to unlabelled data
+
+Not a fourth stage — the *deployment* of the three. Stages 1–3 consume labels; the calibrated
+result is meant to run where there are none, which is the purpose of the whole method. What transfers is not uniform, and conflating the categories is how auto-eval becomes
+fiction.
+
+| | on an unlabelled set |
+|---|---|
+| judge selection (surviving arms) | transfers, subject to shift |
+| **`q₀` / `q₁`** | transfers **by assumption** — not re-measurable without labels |
+| **`e_c`** (per-criterion noise floor) | **re-measurable directly** — built from our self-flip rate and judge instability, neither of which needs labels |
+| **ranked queue (ordering)** | ✅ fully — needs only `e_c` |
+| **class discovery** (binomial vs `e_c`, § 3.4) | ✅ **fully label-free — the strongest transfer in the method** |
+| **lift / catch rate** | ❌ **not measurable** — both `precision@k` and the base error rate need labels |
+| accuracy | ❌ never, by design |
+
+The asymmetry to internalize: **class discovery survives the move almost intact; every
+quantitative claim about the queue does not.** On a new customer slice, *"criterion X conflicts on
+40 charts, well above its noise floor"* is defensible. *"This queue catches 60% of errors"* is a
+transferred assumption wearing a number's clothing.
+
+### The named failure mode: distribution shift
+
+Calibration was measured on one customer's notes. On a new slice the EHR templates, documentation
+habits and case mix all differ, so the base error rate *and* the judge's competence move. The
+literature names this exactly: the bias-corrected estimator "fails under realistic shifts where
+test and calibration distributions have different true accuracy rates", and PPI requires the
+labelled and unlabelled sets be i.i.d. — no covariate or label shift
+([[LLM as a judge SOTA]] §6).
+
+### Four sentinels that detect broken transfer, all label-free
+
+Lift cannot be measured on the new set, but *whether the calibration still applies* can be:
+
+| # | sentinel | reads as |
+|---|---|---|
+| 1 | **Input-adequacy shift** — note-length distribution, template artifacts, null channels, section headers ([[auto eval plan]] tier 0) | if the input distribution moved, transfer is suspect before anything else is examined |
+| 2 | **`CANNOT_ASSESS` rate** vs the calibration set | a jump means the judge is out of its depth on these notes |
+| 3 | **Arm–arm agreement** vs the calibration set | a collapse means the judges are guessing |
+| 4 | **`e_c` recomputed** on the new slice | if self-flip or judge instability moved, **recompute the weights** rather than transferring them |
+
+Sentinels 2 and 3 are the useful pair — both computable on any unlabelled data, both proxies for
+"the judge no longer knows what it is doing here."
+
+### The upgrade path: a small anchor sample
+
+For an actual number on unlabelled data, label **30–50 encounters** of the slice. That is the PPI
+setup: a small human-labelled sample plus the large judged set gives an **unbiased** population
+estimate regardless of the judge's error profile, and at ρ≈0.6 those 50 labels behave like ~78
+([[LLM as a judge SOTA]] §6). This is the only honest route from a judge to a reported figure on
+new data, and it is cheap enough to be routine per slice.
+
+### What an unlabelled-run report may say
+
+> Ranked 850 encounters; flagged the top 128. **Ordering and class findings are computed on this
+> slice; the lift figure (2.9×) is carried over from `washington-402` calibration and is not
+> measured here.** Judge `CANNOT_ASSESS` 4.1% vs 3.8% at calibration; arm agreement 0.81 vs 0.84 —
+> both within tolerance, so transfer is plausible. Three criterion classes exceed their noise
+> floor.
+
+That is a defensible artifact. The same report stating "lift 2.9×" bare, as though measured, is
+not. And the frozen-detector rule applies here specifically: a detector used on unlabelled data is
+**version-pinned**, and re-validated whenever the judge prompt, the pipeline prompt, or the
+provider snapshot changes ([[auto eval proposal]] §4 C-7, C-10).
+
+---
+
 # 2 · Minimal run example
 
 One encounter, three stages, no caveats. **The goal:** find which of our 402 ED encounters are
