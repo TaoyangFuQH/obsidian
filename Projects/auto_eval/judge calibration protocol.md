@@ -2,17 +2,75 @@
 updated: 2026-08-17
 tags: [project, coding-pod, eval, auto-eval, llm-as-judge, calibration, ws-b0]
 ---
-# Introduction
+# Judge-calibrated auto-eval for rubric-based coding pipelines
 
-[[LLM as a judge SOTA]] §2
+## Introduction
 
-A reference-free judge over-credits the answer it is shown and is near-random precisely where it does not know the answer. This technique closes that gap without pretending to replace ground truth: it uses a cross-family LLM as a judge to disagree with our pipeline, but **calibrates the judge against the labels we already have first.
+Automated medical-coding pipelines emit structured, billable outputs — an ordinal level per
+decision axis, a code per encounter — whose correctness is established by human auditors. Audit
+labels are expensive, arrive slowly, and cover a small fraction of throughput, so most of what a
+pipeline produces is never measured. Three costs follow directly. There is **no triage order**: a
+run of several hundred encounters presents no ordering, and review or root-cause analysis starts
+wherever someone happens to look. There is **no coverage**: defect classes that occur outside the
+labelled slice stay invisible until a customer finds them. And there is **no pre-flight**: a
+candidate change ships onto unlabelled data with no signal at all until reviewer feedback returns
+weeks later.
 
-**Goal:** rank a review queue and surface defect *classes* — not produce an accuracy number. **Input:** a dataset's `input.csv` (the note), its `gt.csv` (for calibration only), and optionally a run dir for the pipeline's own per-criterion output. **Output:** a ranked review queue with a measured lift over random ordering, a per-criterion class table identifying broken prompts, and a `calibration.json` recording which judge on which axis was validated and how well.
+The obvious remedy — have a second language model judge the pipeline's output, reference-free —
+fails in a way that is now well documented, and fails hardest exactly where it would be most
+useful. Reference-free judges systematically **over-credit the answer they are shown**, and their
+agreement with human raters collapses **precisely on the instances the judge would itself get
+wrong** (κ 0.78 → 0.14 in the reference case; [[LLM as a judge SOTA]] §2). Because judge and
+generator are drawn from overlapping training distributions, judge blindness is *correlated* with
+pipeline blindness. Two further limits bound what may be asked: language models are poor at direct
+code assignment (CPT exact-match ≈ 50%), and poor at exact agreement on short ordinal scales
+(38–58% on 3–5 rungs, versus κ 0.642 on binary criteria; [[LLM as a judge SOTA]] §3). An
+uncalibrated judge therefore yields a fluent, plausible, and unfalsifiable artifact — a model
+grading its own homework.
+
+This technique rests on two observations that together make the judge usable anyway. First, a
+judge's competence is **task-specific and directly measurable** on the labelled slice already in
+hand: perturb a known-correct answer by a known amount and ask whether the judge notices.
+Second, rubric-based coding is **decomposable** — the rubric is closed and stated as
+criterion-level predicates — so the judge can be asked a reading-comprehension question against
+documentation in front of it, rather than asked to generate a code. From these follow three
+stages. **Stage 1 (calibrate)** administers a perturbation exam over labelled encounters,
+stratified by how far the perturbation moves the answer; it *eliminates* judges that cannot
+discriminate, quantifies same-family self-preference, and decides which output surface — level or
+criterion — is judgeable at all. **Stage 2 (judge)** runs every surviving judge, blind and
+cross-family, one criterion per call, over any encounters at all including unlabelled ones,
+producing disagreements localized to a field and a span. **Stage 3 (aggregate)** collapses those
+disagreements two ways: down the encounter axis into a reliability-weighted review queue, and
+down the criterion axis into defect *classes*, where a single criterion conflicting across many
+encounters indicates one faulty prompt rather than many faulty encounters. Human adjudication is
+purchased only on the flagged head, and is captured so that it feeds back as calibration data.
+
+**The scope claim is deliberately narrow.** The method **ranks and localizes; it does not
+measure.** A judge-derived accuracy figure is biased by the judge's own error profile, in a known
+direction, so headline accuracy continues to come from human labels or from prediction-powered
+inference. Crossing that line is what collapses a two-artifact evaluation contract into
+self-assessment.
+
+**Input.** Per-encounter documentation (the note); a ground-truth-labelled slice, used *only* for
+calibration and for measuring lift; optionally the pipeline's own per-criterion output, where
+criterion-level judging is the surviving surface. **Output.** A `calibration.json` recording which
+judges were validated, on which axis, and how well — the sensitivity and specificity that any
+later reported figure depends on; a `findings.json` of conflicts, each pinned to an encounter,
+field and span; a **ranked review queue** with a lift over random ordering measured on the
+labelled slice; and a **per-criterion class table** identifying the prompts worth fixing. Note
+that Stage 1 eliminates rather than selects: every judge that passes carries into Stages 2 and 3,
+because it is *agreement between independent judges* that separates a genuine defect from a single
+judge's blind spot.
+
+The method is product-agnostic — it assumes only ordinal axes over a closed criterion rubric.
+§ 2 and § 3 instantiate it on the ED product (`washington-402`, n=402) because that is where the
+labels and the cross-family verifier arms already exist; the clinic product differs in one
+respect that matters, having three same-model votes and no cross-family arm at all, so Stage 1
+there must add one before it can be run.
 
 Feeds [[auto eval proposal]] WS-B; gates [[tier 4 criterion judging]]. Literature:
-[[LLM as a judge SOTA]]. Adapted from
-[Kranti & Vajjala's](https://arxiv.org/abs/2607.12885) two-stage protocol.
+[[LLM as a judge SOTA]]. Stage 1 adapts
+[Kranti & Vajjala's](https://arxiv.org/abs/2607.12885) two-stage calibration/sensitivity protocol.
 
 > **Reading order.** § 1 is the method. § 2 is a worked example on one encounter, with no
 > caveats — read that first if the method reads abstractly. § 3 is the reference layer:
