@@ -359,6 +359,10 @@ Rank all 402 encounters by **reliability-weighted** conflict count, hand a coder
 and state the operating point: *"flagged 60 encounters; judge sensitivity 0.88, specificity
 0.29 at one rung on the held-out calibration set; lift over random ordering = X."*
 
+**Expanded in full below** — see § Stage 3 in detail: the four artifacts, the queue schema (which
+doubles as the `d_c` label-collection instrument), how `k` is chosen, the report's six required
+sections, and what v1 may and may not claim.
+
 ## Why Stage 1 cannot be skipped
 
 Without it, Stage 2 still runs and still emits a tidy conflict list — you simply cannot tell
@@ -449,3 +453,191 @@ share a single note-reading step. Unmitigated, this over-counts precisely where 
 criteria trip together — the failure [[auto eval proposal]] §3 tier 6.1 already names. Mitigate
 by capping the per-axis contribution, or by grouping correlated criteria and counting the group
 once.
+
+---
+
+# Lift, cause separation, and class discovery
+
+The two things Stage 3 depends on. Base rates below are **measured** on
+`ed/experiments/washington-402-baseline/results/run1` against
+`ed/dataset/washington-402/gt.csv`.
+
+## The base rates, measured
+
+| axis | paired | wrong | **base error rate** | max achievable lift @top-15% |
+|---|---|---|---|---|
+| `pro` | 400 | 57 | **14.2%** | 6.67× |
+| `copa` | 71 | 15 | 21.1% | 4.73× |
+| `data` | 72 | 17 | 23.6% | 4.24× |
+| `risk` | 71 | 14 | 19.7% | 5.07× |
+
+## Lift
+
+    lift@k = precision@k / base_error_rate
+
+On `pro`, top-15% = 60 encounters; if 25 are genuinely wrong then precision@60 = 41.7% and
+lift = **2.9×**. Report the **whole curve** (precision *and* recall for k = 5…100%) plus rank
+AUC — never a single k. The shippable sentence is the recall end: *"flag the top 15%, catch X%
+of all errors."*
+
+**MDE, and it decides where lift is measurable at all:**
+
+| axis | top-15% n | precision CI half-width | verdict |
+|---|---|---|---|
+| `pro` | 60 | ~12.6pp | must clear ~25% observed precision to exclude the 14.2% base → **detectable lift starts ≈2×** |
+| copa / data / risk | 11 | ~29.6pp | **not measurable at any usable k** |
+
+So lift is computed on `pro`; the MDM axes are read as suggestive only. Third independent route
+to the same conclusion as § The data and [[auto eval proposal]] §3.1.
+
+## Separating the three causes — a funnel, not a per-encounter verdict
+
+A conflict can mean (1) we are wrong, (2) the label is genuinely ambiguous, or (3) the judge has
+a blind spot. **These are not separable for a single encounter.** They are separable as a funnel,
+and each stage's attrition rate is itself the measurement:
+
+| stage | strips | mechanism |
+|---|---|---|
+| all flagged conflicts | — | |
+| → confirmed by **≥2 cross-family arms** | **(3) judge blind spot** | a conflict only arm A raises is likelier arm-specific noise. Requiring A ∧ B removes that component; **report the single-arm vs multi-arm split — that ratio is the judge-noise estimate** |
+| → **two coders agree with each other** | **(2) label ambiguity** | coder–coder disagreement on flagged items *is* the ambiguity rate, by definition. Route to `label-or-standard`: a first-class result, not a loss ([[auto eval plan]] tier 5) |
+| → coders agree the pipeline is wrong | — | remainder is **(1) our error** → `system` disposition, and this is the denominator lift is computed against |
+
+Human adjudication is paid only on the flagged head, never the population.
+
+## Class discovery — aggregate down the criterion axis
+
+The findings table is one row per **(encounter, criterion, arm)**. Group by *criterion* rather
+than by encounter and compute, per criterion: `n_asserted`, `n_conflicts`, conflict rate,
+direction, and the noise floor `e_c` from § Computing the ranking weights.
+
+**The test for "class, not noise" is a one-sided binomial against `e_c`.** This is the second
+payoff from the weighting work — `e_c` doubles as the null hypothesis:
+
+> `behavioral_health_safety_assessment`: asserted true on 180, judge disagrees on 62 → **34.4%
+> observed vs a 26.2% noise floor**, n=180, one-sided p ≈ 0.01. Real — but only ~8pp above its
+> own noise, so say so.
+
+A criterion with `e_c` = 6.9% conflicting at 30% is overwhelming by comparison. That is a prompt
+bug.
+
+**Direction is the signature.** Systematically one-directional (we assert true, judge says false,
+almost always) = prompt bug. Bidirectional scatter around `e_c` = instability. Compute the
+asymmetry; do not eyeball it.
+
+**Then cluster the spans** for the mechanism — 40 conflicts where the judge finds no span at all,
+or where every conflict cites the same template line, is a *cause*, which is what `causes.json`
+requires.
+
+**Why this is the cheap end, and the reason it outranks the queue:** adjudicating a **class** is
+O(1) human work for O(40) encounters — one read of the criterion definition plus five examples
+settles whether it is our bug or the judge misreading the rubric. Adjudicating 40 encounters
+individually is 40× the effort for less. Promotion is then the existing door
+([[auto eval proposal]] § Contract): `causes.json` entry with `locus` = that criterion's prompt
+text, `targets` = the conflicting encounter ids, and **`controls`** = encounters asserting the
+same criterion where the judge agreed — so a fix that breaks them is caught at eval.
+
+---
+
+# Stage 3 in detail — what actually ships
+
+## The finding that shapes all of it: **56 of 57 errors are exactly one rung**
+
+Measured on `washington-402-baseline/run1`, `pro` axis, n=400 on-ladder:
+
+| rung distance | n |
+|---|---|
+| −1 (under-code) | 20 |
+| 0 (correct) | 343 |
+| +1 (over-code) | **36** |
+| +2 | **1** |
+
+Over-coding 9.2% vs under-coding 5.0% — a **1.85× skew toward over-coding**, which is the
+compliance direction and is a required report section.
+
+Two consequences, both sharpening earlier sections:
+
+- **The weighted `q₀` is ~98% the one-rung number.** § Statistics says weight `q₀` by the
+  pipeline's actual error distribution; that distribution is 56 one-rung to 1 two-rung. So use
+  the C2+1 specificity almost exclusively (0.29 illustratively), **not** the flattering
+  two-rung figure (~0.94). Blending them would overstate the judge.
+- **There is no "at least it catches the big errors" fallback** — big errors do not exist here
+  (1 in 400). `C2±2` is therefore a **sanity floor on the judge only**, not an operationally
+  relevant measurement, and **one-rung detection is the entire game.**
+
+## The four artifacts
+
+| artifact | unit | ids | audience |
+|---|---|---|---|
+| `findings.json` | (encounter, criterion, arm) conflict | yes | machine; feeds the rest |
+| `queue.csv` | encounter, ranked | yes | **the coder** |
+| `calibration.json` | (judge model × axis × criterion) | no | provenance; **gates the other three** |
+| `autoeval-<dataset>.md` | population | **no** | product + research; shareable |
+
+Same ids-split discipline as `docs/EVALUATION.md`: per-encounter artifacts stay internal, the
+population artifact can leave the room. `findings.json` and `queue.csv` carry note spans →
+local-only, never committed, never synced.
+
+## The queue is also the label-collection instrument
+
+The part worth designing carefully. A row reading "encounter `944069156`, score 3.2" wastes the
+coder's time — they would re-read the whole chart. Every row carries **localized evidence** plus
+a slot for the verdict:
+
+    enc_id, rank, score, axis, our_value, direction,
+    criteria_conflicted,      # e.g. behavioral_health_safety_assessment
+    our_span,                 # what we cited
+    judge_span,               # what the judge found, or NONE
+    arms_confirming,          # "2 of 2"  <- the judge-noise strip
+    coder_verdict,            # [ ours | judge | ambiguous ]   <- THEY fill this in
+    coder_note
+
+**`coder_verdict` is what closes the loop.** It is the adjudication sample that estimates `d_c`
+— the numerator § Computing the ranking weights calls unmeasurable without labels. A coder
+working the queue *produces* that label as a by-product, upgrading the ranking from
+noise-discounted to properly weighted. Design the queue without it and the review is paid for
+twice.
+
+It also supplies the funnel's last two stages directly: `ambiguous` verdicts are the
+label-ambiguity population, and coder-vs-coder disagreement on double-reviewed rows is the
+ambiguity *rate*.
+
+## Choosing `k`
+
+| approach | rule | when |
+|---|---|---|
+| **capacity-bound** | `k = coder_hours / minutes_per_review` | **v1.** It is what actually constrains us |
+| precision floor | stop where precision@k falls to the 14.2% base rate | diagnostic — beyond it you are doing random review |
+| conformal risk control | pick `k` s.t. recall ≥ X at 90% confidence, finite-sample valid | later ([[auto eval proposal]] 6.2) |
+
+Ship capacity-bound, and **plot where the precision curve crosses the base rate** so a reader
+can see whether the budget is well chosen.
+
+## The report's six required sections
+
+1. **Calibration** — the Stage-1 table per (judge model × axis), with the judge prompt hash and
+   the provider model versions.
+2. **Operating point** — `k`, precision@k, recall@k, lift, with CIs, **plus the achieved MDE**
+   ("lift below ~2× is invisible at this n"). A null without an MDE is a defect
+   (`docs/EVALUATION.md`).
+3. **Compliance direction** — over 9.2% / under 5.0%, and whether the queue over-samples the
+   over-coding direction as intended.
+4. **Class table** — per criterion: `n_asserted`, conflict rate, `e_c`, one-sided p, direction
+   asymmetry (§ Class discovery).
+5. **The funnel** — flagged → multi-arm confirmed → coder-agreed → confirmed as our error, with
+   the attrition rate at each stage.
+6. **What was not covered** — `CANNOT_ASSESS` rate, axes excluded for insufficient labels, any
+   top-N truncation. **No silent caps:** a report that omits its coverage reads as complete when
+   it is not.
+
+## What v1 may and may not claim
+
+| | |
+|---|---|
+| **may** | *"here is a ranked queue; on `pro` it achieves lift L (95% CI …) against a measured 14.2% base error rate"* |
+| **may not** | any accuracy number for the pipeline · any lift claim on copa/data/risk (n=11 at top-15%, ±29.6pp) · any per-criterion precision before `coder_verdict` data exists |
+
+**Staleness rule:** a queue whose `calibration.json` prompt hash does not match the judge prompt
+in use is **void**. And note these run dirs carry **no `manifest.json`**, so the qh-platform SHA
+is unrecorded — [[auto eval proposal]] item A5, which must be fixed before any of this is
+citable.
