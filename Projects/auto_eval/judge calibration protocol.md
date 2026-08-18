@@ -9,7 +9,7 @@ tags: [project, coding-pod, eval, auto-eval, llm-as-judge, calibration, ws-b0]
 LLM judges tend to over-credit the answer they are shown, and their agreement with humans
 collapses precisely on the instances they would themselves get wrong. The authors proposed a two stage pipeline with Stage 1, calibration experiments that assess the judge model's knowledge of the task it is evaluating, and Stage 2, sensitivity experiments that assess how the judge model's performance is impacted by the presence and positioning of the reference answer in the prompt, and a final Stage 3, to ranking data instance based on the judges disagreement results.
 
-Feeds [[auto eval proposal]] WS-B; gates [[tier 4 criterion judging]]. Stage 1 adapts
+Applied to both products in [[auto eval rollout plan]]. Feeds [[auto eval proposal]] WS-B; gates [[tier 4 criterion judging]]. Stage 1 adapts
 [Kranti & Vajjala's](https://arxiv.org/abs/2607.12885) calibration/sensitivity protocol.
 
 ---
