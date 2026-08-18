@@ -10,6 +10,126 @@ have never asked: **is a judge model competent on ED MDM at all?**
 
 Feeds [[auto eval proposal]] WS-B; gates [[tier 4 criterion judging]].
 
+> **Reading order.** § Plain walkthrough below is the orientation — read it first, it has no
+> caveats and no statistics. Everything after § What this stage is for is the reference layer:
+> the same three stages with the real measured numbers, the failure modes, and the maths.
+> § The minimal end-to-end run is the technical twin of the plain walkthrough.
+
+---
+
+# Plain walkthrough — the three stages, no caveats
+
+**The goal:** find which of our 402 ED encounters are probably coded wrong, **without** needing
+a human to label them all.
+
+We use a second LLM (a "judge") to disagree with our pipeline. But first we have to check the
+judge is any good.
+
+## Stage 1 — test the judge
+
+**Question: is the judge any good?**
+
+We have 71 encounters where a human auditor already told us the right answer. Use them as an
+exam.
+
+Take encounter `944069156`. The auditor says **RISK = moderate**. So we ask the judge four
+questions about it:
+
+| we tell the judge | truth | correct answer |
+|---|---|---|
+| "RISK is moderate" | right | YES, supported |
+| "RISK is high" | wrong | NO |
+| "RISK is low" | wrong | NO |
+| "RISK is minimal" | wrong | NO |
+
+The judge only sees the chart and the question. It does not know the auditor's answer.
+
+Do this for all 71 encounters × 3 axes = **864 questions**, through 3 candidate judges
+(GPT-5.4, Gemini, Claude).
+
+**Then grade the judges.** Say GPT-5.4 gets 88% right on the true answers ✅ — but accepts the
+wrong "RISK is high" **71% of the time** ❌.
+
+**What Stage 1 decides:**
+
+- **Which judge to use** — the one that best tells right from wrong.
+- **Whether asking about levels works at all.** Here it does not: the judge waves a wrong level
+  through 71% of the time. So we stop asking about levels.
+
+## Stage 2 — run the judge
+
+**Question: where does the judge disagree with us?**
+
+Levels failed in Stage 1, so ask about something smaller and more concrete: the **individual
+checkboxes** our pipeline fills in.
+
+For `944069156`, our pipeline said:
+
+    prescription_drug_management         = YES
+    controlled_substance_iv             = NO
+    life_or_function_threatening        = NO
+    behavioral_health_safety_assessment = YES
+
+Ask the judge about each one separately — *"does this chart show behavioral health safety
+assessment? Quote the line."* The judge never sees our answer.
+
+| checkbox | us | judge | |
+|---|---|---|---|
+| prescription_drug_management | YES | YES | ✅ same |
+| controlled_substance_iv | NO | NO | ✅ same |
+| life_or_function_threatening | NO | NO | ✅ same |
+| behavioral_health_safety_assessment | YES | **NO** | ⚠️ **disagree** |
+
+**That disagreement is the output.** Not "this chart looks wrong", but specifically: encounter
+`944069156`, the `behavioral_health_safety_assessment` checkbox, and the line the judge could
+not find.
+
+Now run it across all 402 encounters.
+
+## Stage 3 — ship it
+
+**Question: what does a human actually receive?** Two things.
+
+### 1 · A ranked list, for a coder
+
+Sort all 402 encounters by how many disagreements they have; give the coder the top 60. Each row
+says where to look, so they do not re-read the whole chart:
+
+| enc | disagreements | checkbox | judge could not find |
+|---|---|---|---|
+| 944069156 | 1 | behavioral_health_safety_assessment | (the line we cited) |
+| 944071243 | 3 | … | … |
+
+The coder writes one word per row: **we were right** / **judge was right** / **genuinely
+unclear**.
+
+### 2 · A summary, for the team
+
+Two useful things fall out:
+
+**Did the ranking work?** We know the true answer for 400 encounters, so we can check. If 25 of
+the top 60 are genuinely wrong, that is 42% — versus 14% if you picked at random. **The list is
+3× better than random.** That number is the whole justification for the tool.
+
+**Is one checkbox broken?** Group the disagreements by checkbox instead of by encounter. If
+`behavioral_health_safety_assessment` disagrees on 40 different charts, that is not 40 bad
+charts — **that is one bad prompt.** Fix it once and all 40 improve. This is usually worth more
+than the coder's list.
+
+## Recap
+
+| stage | what you do | what you get |
+|---|---|---|
+| **1** | Quiz the judge on 71 encounters where you know the answer | Which judge to use, and which questions it can actually handle |
+| **2** | Ask the judge about each checkbox on all 402 encounters | Specific disagreements, each pinned to a field |
+| **3** | Rank them, hand the top 60 to a coder | A review queue + proof it beats random + a list of broken prompts |
+
+**The one rule holding it together: Stage 1 comes first.** Without it, Stage 2 still produces a
+tidy list of disagreements — you just have no idea whether the judge or your pipeline is the one
+that is wrong.
+
+---
+
 ## What this stage is for — and what it is NOT for
 
 **It is a screening instrument for the judge *model*. It is not a tuning loop for the judge
@@ -273,6 +393,9 @@ arms, because it has the power; the MDM axes follow and are read as suggestive a
 ---
 
 # The minimal end-to-end run, for ED
+
+*The technical twin of § Plain walkthrough — same three stages, with the real measured
+numbers, the item counts verified against `gt.csv`, and the caveats.*
 
 One encounter threaded through, so the shape is concrete. Two stages: **prove the judge works,
 then use it.** Encounter `944069156` — GT `risk = moderate`, `copa = moderate`, `data = none`,
