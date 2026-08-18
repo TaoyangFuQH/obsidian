@@ -7,60 +7,20 @@ tags: [project, coding-pod, eval, auto-eval, llm-as-judge, calibration, ws-b0]
 [[LLM as a judge SOTA]] §2
 
 LLM judges tend to over-credit the answer they are shown, and their agreement with humans
-collapses precisely on the instances they would themselves get wrong. Because judge and generator share training distributions, judge
-blindness is *correlated* with pipeline blindness, so an uncalibrated judge yields a plausible and
-unfalsifiable artifact.
-
-Two observations make the judge usable anyway: its competence is **task-specific and measurable**
-on the labelled slice already in hand — perturb a known-correct answer by a known amount and see
-whether the judge notices — and rubric-based coding is **decomposable**, so the judge can be asked
-reading comprehension against the documentation in front of it rather than asked to generate a
-code. Hence three stages. **Stage 1 (calibrate)** administers that perturbation exam, stratified
-by perturbation size; it *eliminates* judges that cannot discriminate, quantifies same-family
-self-preference, and decides which output surface — level or criterion — is judgeable at all.
-**Stage 2 (judge)** runs every surviving judge, blind and cross-family, one criterion per call,
-over any encounters including unlabelled ones. **Stage 3 (aggregate)** collapses the resulting
-disagreements down the encounter axis into a weighted review queue, and down the criterion axis
-into defect *classes*, where one criterion conflicting across many encounters means one faulty
-prompt rather than many faulty encounters.
-
-The scope claim is deliberately narrow: the method **ranks and localizes; it does not measure.**
-Headline accuracy still comes from human labels or prediction-powered inference. **Input:**
-per-encounter documentation, a labelled slice used only for calibration and lift, and optionally
-the pipeline's own per-criterion output. **Output:** a `calibration.json` recording which judges
-were validated on which axis and how well (the sensitivity and specificity any later figure
-depends on), a `findings.json` of conflicts each pinned to an encounter, field and span, a
-**ranked queue** with lift measured against the labelled slice, and a **per-criterion class
-table** naming the prompts worth fixing. Stage 1 eliminates rather than selects — every judge that
-passes carries forward, because agreement *between* independent judges is what separates a real
-defect from one judge's blind spot.
-
-Product-agnostic; it assumes only ordinal axes over a closed criterion rubric. §§ 2–3 instantiate
-it on ED (`washington-402`, n=402), where the labels and cross-family verifier arms already exist;
-clinic has three same-model votes and no cross-family arm, so Stage 1 there must add one first.
+collapses precisely on the instances they would themselves get wrong. The authors proposed a two stage pipeline with Stage 1, calibration experiments that assess the judge model's knowledge of the task it is evaluating, and Stage 2, sensitivity experiments that assess how the judge model's performance is impacted by the presence and positioning of the reference answer in the prompt, and a final Stage 3, to ranking data instance based on the judges disagreement results.
 
 Feeds [[auto eval proposal]] WS-B; gates [[tier 4 criterion judging]]. Stage 1 adapts
 [Kranti & Vajjala's](https://arxiv.org/abs/2607.12885) calibration/sensitivity protocol.
 
-> **Reading order.** § 1 is the method. § 2 is a worked example on one encounter, with no
-> caveats — read that first if the method reads abstractly. § 3 is the reference layer:
-> measured numbers, statistics, and the failure modes.
-
 ---
 
-# 1 · The method
+# 1 · The 3 Stage Method
 
-Three stages, and the ordering is the whole technique:
-
-| stage | question | data needed |
-|---|---|---|
-| **1 · Calibrate** | Is the judge any good, and at *what*? | labelled rows only |
-| **2 · Judge** | Where does the judge disagree with us? | any encounter, labelled or not |
-| **3 · Aggregate** | What does a human receive? | stage-2 conflicts |
-
-**The one rule: Stage 1 comes first.** Without it Stage 2 still emits a tidy list of
-disagreements — you simply cannot tell whether the judge or the pipeline is the one that is
-wrong.
+| stage             | question                               | data needed                    |
+| ----------------- | -------------------------------------- | ------------------------------ |
+| **1 · Calibrate** | Is the judge any good, and at *what*?  | labelled rows only             |
+| **2 · Judge**     | Where does the judge disagree with us? | any encounter, labelled or not |
+| **3 · Aggregate** | What does a human receive?             | stage-2 conflicts              |
 
 ## Stage 1 — calibrate the judge
 
