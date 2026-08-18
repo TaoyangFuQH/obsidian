@@ -4,20 +4,11 @@ tags: [project, coding-pod, eval, auto-eval, llm-as-judge, calibration, ws-b0]
 ---
 # Introduction
 
-**Introduction.** Every dataset we own is label-bound — 71 auditor-labelled rows per MDM axis on
-`washington-402`, 400 on the billed `pro` axis — so every new customer slice and every candidate
-arm on unlabelled data is currently unmeasured, with no triage order, no coverage of defect
-classes outside the labelled slice, and no pre-flight signal until reviewer feedback returns
-weeks later. This technique closes that gap without pretending to replace ground truth: it uses a
-**cross-family LLM as a judge** to disagree with our pipeline, but **calibrates the judge against
-the labels we already have first**, because a reference-free judge over-credits the answer it is
-shown and is near-random precisely where it does not know the answer
-([[LLM as a judge SOTA]] §2). **Goal:** rank a review queue and surface defect *classes* — not
-produce an accuracy number. **Input:** a dataset's `input.csv` (the note), its `gt.csv` (for
-calibration only), and optionally a run dir for the pipeline's own per-criterion output.
-**Output:** a ranked review queue with a measured lift over random ordering, a per-criterion
-class table identifying broken prompts, and a `calibration.json` recording which judge on which
-axis was validated and how well.
+[[LLM as a judge SOTA]] §2
+
+A reference-free judge over-credits the answer it is shown and is near-random precisely where it does not know the answer. This technique closes that gap without pretending to replace ground truth: it uses a cross-family LLM as a judge to disagree with our pipeline, but **calibrates the judge against the labels we already have first.
+
+**Goal:** rank a review queue and surface defect *classes* — not produce an accuracy number. **Input:** a dataset's `input.csv` (the note), its `gt.csv` (for calibration only), and optionally a run dir for the pipeline's own per-criterion output. **Output:** a ranked review queue with a measured lift over random ordering, a per-criterion class table identifying broken prompts, and a `calibration.json` recording which judge on which axis was validated and how well.
 
 Feeds [[auto eval proposal]] WS-B; gates [[tier 4 criterion judging]]. Literature:
 [[LLM as a judge SOTA]]. Adapted from
@@ -50,7 +41,8 @@ wrong.
 **It is a screening instrument for the judge *model*. It is not a tuning loop for the judge
 *prompt*.** Getting this backwards is the main way the technique gets ruined. Four goals:
 
-1. **Disqualify incompetent judges** before anything is spent on Stage 2. In the source paper
+1. **Disqualify incompetent judges** before anything is spent on Stage 2. Note the verb:
+   Stage 1 **eliminates**, it does not pick a single winner (§ Which arms carry forward). In the source paper
    this is exactly how the protocol is used — a judge that accepted ~60% of known-wrong answers
    was ruled out. Nothing was tuned; a model was rejected.
 2. **Produce `q₀` and `q₁`** (specificity and sensitivity). These are not merely diagnostic —
@@ -167,13 +159,52 @@ Written down first so the result cannot be rationalized afterwards:
 Three of these six are *useful findings* rather than failures. That is the property that makes
 Stage 1 the right first step.
 
+### Which arms carry forward — all survivors, not one winner
+
+**Stage 1 eliminates; it does not select.** Every arm that clears the kill switches runs in
+Stages 2 and 3. Three reasons:
+
+1. **Stage 1 usually cannot distinguish the survivors.** At n≈71 a gap estimate carries a
+   ~11.6pp CI half-width, so a 17pp-vs-19pp difference between two cross-family arms is noise.
+   Declaring a winner is false precision — the last kill-switch row says exactly this.
+2. **The cause-separation funnel requires ≥2 arms** (§ 3.2). Stripping "judge blind spot" means
+   requiring a conflict be confirmed by two *independent* cross-family arms. With a single arm
+   that stage cannot be performed at all: there is no way to separate arm-specific noise from a
+   real disagreement, so you lose the ability to say what a conflict *means* — not merely some
+   accuracy.
+3. **Diversity, not redundancy.** AutoRubric found same-model ensembles gave strong judges only
+   κ +0.051. But GPT-5.4 and Gemini differ in family, provider and training data, which is the
+   case where ensembling actually buys something.
+
+**How they combine — no new mechanism.** § 3.3 already treats each conflict as evidence weighted
+`w = log(d_c / e_c)`; an arm is just another detector with its own instability `j_c`:
+
+    encounter score = Σ over (arm, criterion) conflicts of w(arm, c)
+
+Two arms conflicting on the same criterion contributes ~twice the log-odds of one, by
+construction. And arm *disagreement* is not a problem to resolve — it is data: the arm-A-vs-arm-B
+disagreement rate on a criterion **is** the estimate of `j_c` for that criterion.
+
+**The mode differs by output:**
+
+| output | mode | why |
+|---|---|---|
+| **class table** (§ 3.4) | require **both** arms (AND) | precision matters — a false class sends someone to rewrite a prompt for nothing |
+| **queue ranking** (§ 3.3) | **weighted sum**; agreement raises the score | recall matters — a hard AND discards single-arm conflicts that are often real |
+
+**Caveat, the same one as for criteria:** arms are not independent — both are LLMs reading the
+same note and sharing blind spots — so two agreeing arms are worth *less* than 2× one arm. The
+correlation is measurable (arm-A/arm-B agreement on criteria where our pipeline is stable), so
+either estimate and discount it, or cap the multi-arm contribution. This is the
+Dawid–Skene-with-dependence item in [[auto eval proposal]] 6.1.
+
 ## Stage 2 — judge, on the surface that survived
 
 Stage 1 decides the surface. If level judging fails its kill switch, drop to the **criterion
 booleans** — the layer AutoRubric measured at κ 0.642 versus QWK ~0.55–0.72 for ordinals.
 
-- **One blinded call per criterion.** Note + that single criterion's definition. The judge never
-  sees our answer. Atomic evaluation prevents halo effects and makes per-criterion reliability
+- **One blinded call per criterion, per surviving arm.** Note + that single criterion's
+  definition. The judge never sees our answer. Atomic evaluation prevents halo effects and makes per-criterion reliability
   computable.
 - **Diff against our output** per (encounter, criterion, arm).
 - **The output is a conflict with an address** — encounter, node, field, plus the span the judge
@@ -267,8 +298,9 @@ Do this for all 71 encounters × 3 axes = **864 questions**, through 3 candidate
 **Then grade them.** Say GPT-5.4 gets 88% right on the true answers ✅ — but accepts the wrong
 "RISK is high" **71% of the time** ❌.
 
-**Stage 1 decides:** which judge to use, and **whether asking about levels works at all**. Here
-it does not — a wrong level goes through 71% of the time. So we stop asking about levels.
+**Stage 1 decides:** which judges are fit to use — *all* that pass, not just the best one — and
+**whether asking about levels works at all**. Here it does not: a wrong level goes through 71% of
+the time, so we stop asking about levels.
 
 ## Stage 2 — run the judge
 
@@ -322,7 +354,7 @@ unclear**.
 
 | stage | what you do | what you get |
 |---|---|---|
-| **1** | Quiz the judge on 71 encounters where you know the answer | Which judge to use, and which questions it can handle |
+| **1** | Quiz the judges on 71 encounters where you know the answer | Which judges are fit to use, and which questions they can handle |
 | **2** | Ask the judge about each checkbox on all 402 encounters | Specific disagreements, each pinned to a field |
 | **3** | Rank them, hand the top 60 to a coder | A review queue + proof it beats random + a list of broken prompts |
 
