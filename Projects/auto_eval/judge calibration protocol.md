@@ -4,326 +4,475 @@ tags: [project, coding-pod, eval, auto-eval, llm-as-judge, calibration, ws-b0]
 ---
 # Introduction
 
-[[LLM as a judge SOTA]] §2
+A coding agent emits structured, billable decisions — an ordinal level per axis, a code per
+encounter — whose correctness is established by human annotation. Annotation is scarce and slow,
+covering a small fraction of throughput, so most of what the agent produces is never measured:
+no triage order on a run, no visibility into defect classes outside the annotated slice, and no
+signal on a candidate change until review returns weeks later. The natural remedy is a second
+model judging the agent's output, but judges applied naively fail hardest where they would help
+most. They **over-credit the answer placed in front of them**, and their agreement with human
+annotators collapses **precisely on the instances they would themselves get wrong**
+(κ 0.78 → 0.14; [[LLM as a judge SOTA]] §2). Because judge and agent are drawn from overlapping
+training distributions, judge blindness is *correlated* with agent blindness — so an uncalibrated
+judge yields a fluent, plausible, unfalsifiable artifact.
 
-LLM judges tend to over-credit the answer they are shown, and their agreement with humans
-collapses precisely on the instances they would themselves get wrong. The authors proposed a two stage pipeline with Stage 1, calibration experiments that assess the judge model's knowledge of the task it is evaluating, and Stage 2, sensitivity experiments that assess how the judge model's performance is impacted by the presence and positioning of the reference answer in the prompt, and a final Stage 3, to ranking data instance based on the judges disagreement results.
+Two properties of the task make judging workable anyway. First, a judge's competence is
+**task-specific and directly measurable** against the annotations already in hand: show it cases
+known to be correct and cases known to be incorrect, and see whether it can tell them apart.
+Second, the coding task is **decomposable** — the guideline is a closed set of criteria — so the
+judge can be asked a bounded verification question ("does this rubric hold for this
+documentation?") rather than the generation question ("what is the right code?"), which is the
+task language models are measurably poor at (CPT exact-match ≈ 50%; ordinal levels 38–58% exact,
+versus κ 0.642 on binary predicates; [[LLM as a judge SOTA]] §3).
 
-Applied to both products in [[auto eval rollout plan]]. Feeds [[auto eval proposal]] WS-B; gates [[tier 4 criterion judging]]. Stage 1 adapts
+The method follows in three stages, then deploys:
+
+| stage | what it does | produces |
+|---|---|---|
+| **1 · Judge calibration** | quiz candidate judges on annotated instances | `accept(corrects)`, `reject(incorrects)` per judge → **judge weights**; unfit judges eliminated |
+| **2 · Judging with rubrics** | one call per rubric per surviving judge, blind to the agent's answer and to annotations | a **rubric result table** per instance, plus **rubric weights** |
+| **3 · Aggregation** | combine judge weights × rubric weights × rubric results | judge-quality diagnostics · a **per-instance score** · **defect classes** |
+| **Auto-eval** | apply the calibrated judges to un-annotated instances | score as an annotation proxy · defect classes, label-free |
+
+**Input:** per-instance documentation; a human-annotated slice, used only for calibration and for
+validating the score; a rubric set; optionally the agent's own per-rubric output. **Output:**
+calibrated judge weights, a per-instance score usable for review triage, and a per-rubric conflict
+table that localizes systematic defects to a **specific criterion** rather than to individual
+instances.
+
+Two scope notes. Stage 1 **eliminates rather than selects** — every judge clearing the threshold
+carries forward, because agreement *between independent judges* is what distinguishes a genuine
+defect from a single judge's blind spot. And the method **ranks and localizes; it does not measure
+accuracy.** A judge-derived accuracy figure inherits the judge's own error profile in a known
+direction, so headline accuracy continues to come from human annotation, or from
+prediction-powered inference over a small annotated anchor sample.
+
+> **Terminology.** *Rubric* and *criterion* are used interchangeably — a single bounded predicate
+> over the documentation. *Instance* and *encounter* likewise. § 3 uses the ED vocabulary
+> (criterion, encounter, axis) because that is where the measurements were taken.
+
+Applied to both products in [[auto eval rollout plan]]. Feeds [[auto eval proposal]] WS-B; gates
+[[tier 4 criterion judging]]. Stage 1 adapts
 [Kranti & Vajjala's](https://arxiv.org/abs/2607.12885) calibration/sensitivity protocol.
+
+> **Reading order.** § 1 is the method. § 2 is a worked example on one encounter, with no
+> caveats — read that first if the method reads abstractly. § 3 is the reference layer:
+> measured numbers, statistics, and the failure modes.
 
 ---
 
-# 1 · The 3 Stage Method
+# The method in three stages
 
-| stage             | question                               | data needed                    |
-| ----------------- | -------------------------------------- | ------------------------------ |
-| **1 · Calibrate** | Is the judge any good, and at *what*?  | labelled rows only             |
-| **2 · Judge**     | Where does the judge disagree with us? | any encounter, labelled or not |
-| **3 · Aggregate** | What does a human receive?             | stage-2 conflicts              |
+## Stage 1 · Judge calibration
 
-## Stage 1 — calibrate the judge
+Evaluate the **capability of a judge**. Show the candidate judges the documentation, the agent's
+result, and — as the exam key the judge never sees — the human annotation. A good judge has a high
+accept rate on cases the annotation says are **correct** and a high reject rate on cases it says
+are **incorrect**. Combine the two into one score to rank and pick the top judges.
+
+| arm | `accept(corrects)` | `reject(incorrects)` | `J = a + r − 1` |
+|---|---|---|---|
+| GPT-5.4 | 88% | 29% | 0.17 |
+| Gemini | 84% | 35% | **0.19** |
+| Claude | 93% | 14% | 0.07 |
+
+**⚠ Use the sum, not a noisy-OR.** `w = 1 − (1−a)(1−r)` saturates and rewards a high accept rate,
+so on these same numbers it ranks **Claude first** (0.940 vs 0.915 / 0.896) — the most *lenient*
+judge, which is the one to discard. The sum has a name: **Youden's J** (informedness),
+`J = a + r − 1`, which measures discrimination above chance, is 0 for a judge that answers
+everything the same way, and whose positivity `J > 0` is *exactly* the validity condition
+`q₀ + q₁ > 1` for the bias-corrected estimator downstream. Read the two columns against each
+other; never the accept column alone.
+
+## Stage 2 · Judging with rubrics
+
+With a list of manually designed rubrics — e.g. `has_chronic_severe_exacerbation` for COPA — make
+**one call per rubric per surviving judge**, per instance, asking only whether that rubric holds.
+Keep each rubric definition simple and single-purpose, and **the judge never sees the agent's
+answer or the annotation.** Per-rubric output may be boolean / ordinal / categorical / `ambiguous`.
+Each rubric also needs a **weight** — uniform, manually assigned (including negative), or learned
+by logistic regression against human labels.
+
+| rubric | weight | Opus 5 | Gemini-3-Flash | GPT-5.4 |
+|---|---|---|---|---|
+| R1 | 10.0 | Yes | Yes | Yes |
+| R2 | 8.0 | moderate (0.75) | low (0.50) | high (1.00) |
+| R3 | −15.0 | No | No | **Yes** |
+
+**Two notes on this table.** Reliability varies sharply by output type — boolean is best
+(87% exact, κ 0.642), ordinal is weak on exact agreement (38–58%) though strong adjacent, so
+**decompose toward boolean wherever the guideline permits.** And *learned* weights overfit at our
+n: 18 rubrics need ~180 error events (~900 instances at a 20% error rate) and we have 62–71
+annotated rows, six rubrics below 2.5% prevalence — so regularize with nested CV, restrict to
+high-prevalence rubrics, or fall back to uniform.
+
+## Stage 3 · Aggregation
+
+From the Stage-1 calibration table and the Stage-2 rubric tables, three outputs:
+
+1. **Judge quality** — inter-judge correlation and per-rubric agreement. Doubles as the estimate of
+   each rubric's judge instability.
+2. **A per-instance score** — judge weights × rubric weights × rubric results, ranked, for review
+   triage; validated against the annotated slice as lift over random ordering.
+3. **Defect classes** — the same table aggregated down the *rubric* axis. One rubric conflicting
+   across 40 instances is **one faulty prompt**, not 40 faulty instances.
+
+## Auto-eval
+
+Once judges are built with human annotations, apply them to instances **without** annotations: the
+score serves as a proxy for annotation for triage, and the rubric results detect defect classes.
+Note the asymmetry — **defect classes and the score's *ordering* transfer label-free; any
+quantitative claim (lift, catch rate) does not** and must be marked as carried over rather than
+measured.
+
+---
+
+# 1 · The method, specified in full
+
+## Stage 1 · Judge calibration
+
+A stage to evaluate the **capability of a judge**. Show each candidate judge the documentation,
+the agent's result and — as the exam key it never sees — the human annotation. A good judge has a
+high accept rate on cases the annotation says are **correct**, and a high reject rate on cases the
+annotation says are **incorrect**:
+
+| arm | `accept(corrects)` | `reject(incorrects)` | `w = a + r` |
+|---|---|---|---|
+| GPT-5.4 | 88% | 29% | 1.17 |
+| Gemini | 84% | 35% | **1.19** |
+| Claude | 93% | 14% | 1.07 |
+
+*(Illustrative, not measured.)*
+
+### The judge weight: use the sum, not the noisy-OR
+
+Two candidate combinations suggest themselves, and **they disagree about which judge to keep:**
+
+| arm | `1 − (1−a)(1−r)` | `a + r` |
+|---|---|---|
+| GPT-5.4 | 0.915 | 1.17 |
+| Gemini | 0.896 | **1.19** |
+| Claude | **0.940** ← ranks 1st | 1.07 ← ranks last |
+
+The noisy-OR form saturates and rewards a high accept rate, so it **crowns the most lenient
+judge** — exactly the one to discard. Use the **sum**, which has a name:
+
+    J  =  accept(corrects) + reject(incorrects) − 1        (Youden's J, "informedness")
+
+`J` measures discrimination *above chance*. It is 0 for a judge that answers everything the same
+way — which is the failure mode a raw accept rate cannot see. And it coincides with something
+needed downstream: `J > 0` is exactly the validity condition `q₀ + q₁ > 1` for the bias-corrected
+estimator `θ̂ = (p̂ + q̂₀ − 1)/(q̂₀ + q̂₁ − 1)` ([[LLM as a judge SOTA]] §6). **The same quantity
+that ranks judges gates whether the correction downstream is even defined.**
+
+Read the two columns *against each other*, never the accept column alone.
+
+### Refinement: stratify `reject(incorrects)` by error distance
+
+On an ordinal axis a single `reject(incorrects)` conflates two very different questions, so build
+the "incorrect" cases by perturbing the annotation a **known distance** and report the reject rate
+per distance:
+
+| condition | shown to the judge | a competent judge should |
+|---|---|---|
+| **C1** | the annotated level | accept ≈100% → `accept(corrects)` |
+| **C2(+1)** | one rung up — over-code | reject — **the one that matters** |
+| **C2(−1)** | one rung down — under-code | reject |
+| **C2(±2+)** | two or more rungs away | reject ≈100%; failure means incompetent, full stop |
+
+This turns one number into a **detection curve**, which is what makes the result operational:
+*"the judge detects a one-rung over-code X% of the time (95% CI …)."* Weight the aggregate
+`reject(incorrects)` by how often the agent **actually** errs at each distance — measured at
+**56 one-rung to 1 two-rung** (§ 3.5), so the one-rung stratum dominates. `C2(±2+)` is therefore
+a **sanity floor on the judge**, not a measurement of anything operational.
 
 ### What this stage is for, and what it is NOT for
 
 **It is a screening instrument for the judge *model*. It is not a tuning loop for the judge
-*prompt*.** Getting this backwards is the main way the technique gets ruined. Four goals:
-
-1. **Disqualify incompetent judges** before anything is spent on Stage 2. Note the verb:
-   Stage 1 **eliminates**, it does not pick a single winner (§ Which arms carry forward). In the source paper
-   this is exactly how the protocol is used — a judge that accepted ~60% of known-wrong answers
-   was ruled out. Nothing was tuned; a model was rejected.
-2. **Produce `q₀` and `q₁`** (specificity and sensitivity). These are not merely diagnostic —
-   they are the parameters of the reporting estimator
-   `θ̂ = (p̂ + q̂₀ − 1)/(q̂₀ + q̂₁ − 1)` ([[LLM as a judge SOTA]] §6). Without them no
-   judge-derived number can be reported honestly.
-3. **Localize the failure** — separate *judge incompetent* from *prompt broken* from *task not
-   decidable from the note*. The `CANNOT_ASSESS` rate isolates the third, which is an
-   `upstream-input` finding rather than a judge finding.
-4. **Quantify self-preference** — the same-family arm against the cross-family arms (pass 1b).
-
-### Where prompt work legitimately enters, and where it becomes Goodhart
+*prompt*.** Getting this backwards is the main way the technique gets ruined.
 
 | | verdict |
 |---|---|
-| **Fixing a broken prompt** — `accept(C1)` is low, so the judge rejects *correct* codings; cause is likely a prompt bug (wrong rubric text, missing level definitions, ambiguous instruction) | **legitimate.** Debugging an apparatus |
-| **Tuning wording to maximize the C1−C2 gap** | **not legitimate.** Iterate against these 71 rows and they become in-sample; accept rates stop measuring competence and start measuring prompt fit to 71 charts — and the inflated `q₀`/`q₁` then corrupt the estimator |
+| **Fixing a broken prompt** — `accept(corrects)` is low, so the judge rejects *correct* codings; cause is likely a prompt bug (wrong rubric text, missing level definitions, ambiguous instruction) | **legitimate.** Debugging an apparatus |
+| **Tuning wording to maximize `J`** | **not legitimate.** Iterate against ~71 annotated rows and they become in-sample; the rates stop measuring competence and start measuring prompt fit, and the inflated `q₀`/`q₁` then corrupt the estimator |
 
-Same rule as [[auto eval proposal]] §4 C-7 (*gating detectors are frozen and version-pinned;
-iteration detectors are separate*), applied to the judge itself. **So Stage 1 needs a dev/holdout
-split:** iterate the prompt on a dev slice, measure the *reported* calibration on a frozen
-holdout the prompt never saw. Affordable on `pro` (100 dev / 300 holdout); at n≈71 per MDM axis
-neither half is — meaning **any prompt iteration on the MDM axes burns the only labels we have.**
+Same rule as [[auto eval proposal]] §4 C-7 (*gating detectors frozen and version-pinned;
+iteration detectors separate*), applied to the judge itself. **So Stage 1 needs a dev/holdout
+split:** iterate the prompt on a dev slice, measure the reported calibration on a frozen holdout
+the prompt never saw. Affordable on ED `pro` (100 dev / 300 holdout); at n≈62–71 per MDM axis
+neither half is — meaning **any prompt iteration there burns the only labels we have.** Freeze
+the prompt before touching the holdout and version-pin it with the `core/prompt_source.py`
+fingerprint. **A `calibration.json` whose prompt hash does not match the prompt in use is stale by
+construction.**
 
-Freeze the judge prompt before touching the holdout and version-pin it with the fingerprint from
-`core/prompt_source.py`. **A `calibration.json` whose prompt hash does not match the prompt in
-use is stale by construction.**
-
-### The one design change from the paper
-
-The paper has a single C1 (known-correct) and single C2 (known-incorrect). On an ordinal axis
-that conflates two different questions, so **C2 is stratified by rung distance**:
-
-| condition | shown to the judge | a competent judge should |
-|---|---|---|
-| **C1** | the **GT** level | accept ≈100% |
-| **C2(+1)** | GT **one rung up** — over-code | reject — **this is the one that matters** |
-| **C2(−1)** | GT one rung down — under-code | reject |
-| **C2(±2+)** | GT two or more rungs away | reject ≈100%; failure means incompetent, full stop |
-
-This turns one number into a **detection curve over rung distance**, testing on our own rubric
-and data what [[LLM as a judge SOTA]] §3 puts in doubt (AutoRubric measured ordinal 3–5-level
-judging at only **38–58% exact**). Its output is the operational sentence we need:
-
-> "The judge detects a one-rung over-code X% of the time (95% CI …)."
-
-`C2(±2+)` is the **sanity floor** — but see § 3.5: two-rung errors barely exist in practice, so
-it validates the judge rather than measuring anything operational.
+Beyond ranking judges, the stage yields three more things: `q₀`/`q₁` for the estimator; a
+**localization** of failure — *judge incompetent* vs *prompt broken* vs *task not decidable from
+the documentation*, the third isolated by the `CANNOT_ASSESS` rate (an `upstream-input` finding,
+not a judge finding); and the self-preference number below.
 
 ### What the judge is asked
 
-Directional and one-sided, never "is this correct?" — matching the compliance asymmetry already
-in `docs/EVALUATION.md`:
+Directional and one-sided, never "is this correct?" — matching the compliance asymmetry already in
+`docs/EVALUATION.md`:
 
-> Here is the ED documentation. Here is the RISK rubric. **Is there documented support for
+> Here is the documentation. Here is the RISK rubric. **Is there documented support for
 > RISK = Moderate, or does the documentation only support a lower level?**
 > Answer `SUPPORTED` / `NOT_SUPPORTED` / `CANNOT_ASSESS`, with the decisive span.
 
 Four rules, each load-bearing:
 
-1. **One proposed level per call.** Never show two and ask which is better — that leaks the
+1. **One proposed value per call.** Never show two and ask which is better — that leaks the
    comparison and invites position bias.
-2. **The judge never learns which condition it is in**, never sees GT, never sees our
-   prediction. Randomize condition order across the run.
+2. **The judge never learns which condition it is in**, never sees the annotation, never sees the
+   agent's answer. Randomize condition order across the run.
 3. **`CANNOT_ASSESS` is first-class** and reported separately — never folded into accept or
    reject.
-4. **Require a span.** A verdict with no pointer into the note is dropped — the mitigation for
-   evaluator hallucination.
+4. **Require a span.** A verdict with no pointer into the documentation is dropped — the
+   mitigation for evaluator hallucination.
 
 **Rubric text comes from the prod prompt** (`copa_prompt.py` / `data_prompt.py` /
 `risk_prompt.py`) via `core/prompt_source.py`, so it is snapshotted and fingerprinted. A judge
 graded against a paraphrased rubric measures the paraphrase.
 
-### Two passes, and what each actually measures
+### Two passes: leniency vs self-preference
 
-C1/C2 items are built from **GT levels**, not from our output — so comparing a same-family arm
-against cross-family arms on them measures **leniency**, not self-preference. Self-preference is
-specifically *inflated credit for its own output*:
+C1/C2 items are built from **annotations**, not from the agent's output — so comparing a
+same-family arm against cross-family arms on them measures **leniency**, not self-preference.
+Self-preference is specifically *inflated credit for its own output*:
 
 | pass | items built from | measures |
 |---|---|---|
-| **1a** | GT + synthetic rung perturbations | **discrimination and leniency** — is the judge competent at all |
-| **1b** | our pipeline's *own* predicted levels, same encounters | **self-preference** — same-family accept rate vs cross-family on identical items |
+| **1a** | annotation + synthetic perturbations | **discrimination and leniency** — is the judge competent at all |
+| **1b** | the agent's *own* predicted values, same instances | **self-preference** — same-family accept rate vs cross-family on identical items |
 
-Pass 1b is cheap (one item per encounter per arm) and is the only one that speaks to the
+Pass 1b is cheap (one item per instance per arm) and is the only one that speaks to the
 [No Free Labels](https://arxiv.org/html/2503.05061v1) finding.
 
 ### Judge arms — cross-family is the point
 
-ED's generator is `claude-sonnet-4-6`, so:
+ED's generator is `claude-sonnet-4-6`; clinic's is `claude-opus-4-6`. So:
 
 | arm | model | purpose |
 |---|---|---|
 | A | **GPT-5.4** (`AZURE_GPT_54_OPENAI_*`) | cross-family judge |
 | B | **Gemini-2.5-pro** (`VERTEX_PROJECT` + ADC) | second cross-family judge, different provider |
-| C | **Claude** (same family as generator) | **instrument**, not a candidate — measures self-preference on pass 1b |
+| C | **Claude** (same family as the agent) | **instrument**, not a candidate — measures self-preference on pass 1b |
 
 Both verifier keys already exist and `ed/verifiers.py` already calls both providers, so the data
-path and its PHI review are precedent, not new.
+path and its PHI review are precedent, not new. **Clinic has no cross-family arm at all** and must
+add one before Stage 1 can run there ([[auto eval rollout plan]]).
 
 ### Kill switches — decide these before running
 
-Written down first so the result cannot be rationalized afterwards:
-
 | observation | conclusion |
 |---|---|
-| `accept(C2 ±2+)` materially above 0 | judge is not reading the chart. **Stop.** Nothing downstream is worth building |
-| `accept(C1)` low | judge rejects *correct* codings — it will bury the queue in false flags; the rubric prompt is wrong before the judge is |
-| `accept(C2 +1)` ≈ `accept(C1)` | judge cannot resolve one rung — AutoRubric's ordinal finding. **Level judging is dead**; go to the binary criterion surface, making **C0** (COPA/RISK schema completion) the critical path |
-| `CANNOT_ASSESS` rate high | either the rubric is not decidable from the note (an `upstream-input` finding, valuable on its own) or the prompt is unclear |
+| `reject(C2 ±2+)` materially below 100% | judge is not reading the documentation. **Stop** |
+| `accept(corrects)` low | judge rejects *correct* codings — it will bury the queue in false flags; the rubric prompt is wrong before the judge is |
+| `reject(C2 +1)` ≈ `1 − accept(corrects)`, i.e. `J ≈ 0` at one rung | judge cannot resolve one rung — AutoRubric's ordinal finding. **Level judging is dead**; go to the rubric surface, making **C0** (COPA/RISK schema completion) the critical path |
+| `CANNOT_ASSESS` rate high | either the rubric is not decidable from the documentation (an `upstream-input` finding, valuable on its own) or the prompt is unclear |
 | arm C ≫ arms A/B **on pass 1b** | self-preference confirmed; **clinic must not use a Claude judge** |
-| winning arm's gap within ~12pp of a rival's | **at n≈71 that is noise, not a ranking.** Do not declare a winner — run both cross-family arms and use their agreement |
+| top arm's `J` within ~12pp of a rival's | **at n≈71 that is noise, not a ranking.** Do not declare a winner — carry both |
 
-Three of these six are *useful findings* rather than failures. That is the property that makes
-Stage 1 the right first step.
+Three of these six are *useful findings* rather than failures. That is what makes Stage 1 the
+right first step.
 
-### Which arms carry forward — all survivors, not one winner
+### All survivors carry forward — Stage 1 eliminates, it does not select
 
-**Stage 1 eliminates; it does not select.** Every arm that clears the kill switches runs in
-Stages 2 and 3. Three reasons:
+Every arm clearing the kill switches runs in Stages 2 and 3. Three reasons:
 
-1. **Stage 1 usually cannot distinguish the survivors.** At n≈71 a gap estimate carries a
-   ~11.6pp CI half-width, so a 17pp-vs-19pp difference between two cross-family arms is noise.
-   Declaring a winner is false precision — the last kill-switch row says exactly this.
+1. **Stage 1 usually cannot distinguish the survivors.** At n≈71 a rate carries a ~11.6pp CI
+   half-width, so `J = 1.17` vs `1.19` is noise. Declaring a winner is false precision.
 2. **The cause-separation funnel requires ≥2 arms** (§ 3.2). Stripping "judge blind spot" means
-   requiring a conflict be confirmed by two *independent* cross-family arms. With a single arm
-   that stage cannot be performed at all: there is no way to separate arm-specific noise from a
-   real disagreement, so you lose the ability to say what a conflict *means* — not merely some
-   accuracy.
+   requiring a conflict be confirmed by two *independent* cross-family arms. With a single arm that
+   stage cannot be performed at all: you lose the ability to say what a conflict *means*, not
+   merely some accuracy.
 3. **Diversity, not redundancy.** AutoRubric found same-model ensembles gave strong judges only
-   κ +0.051. But GPT-5.4 and Gemini differ in family, provider and training data, which is the
-   case where ensembling actually buys something.
+   κ +0.051 — but GPT-5.4 and Gemini differ in family, provider and training data, which is the
+   case where ensembling buys something.
 
-**How they combine — no new mechanism.** § 3.3 already treats each conflict as evidence weighted
-`w = log(d_c / e_c)`; an arm is just another detector with its own instability `j_c`:
+## Stage 2 · Judging with rubrics
 
-    encounter score = Σ over (arm, criterion) conflicts of w(arm, c)
+With a set of **manually designed rubrics** — e.g. `has_chronic_severe_exacerbation` for COPA —
+make **one call per rubric per surviving judge**, per instance, asking only whether that rubric
+holds.
 
-Two arms conflicting on the same criterion contributes ~twice the log-odds of one, by
-construction. And arm *disagreement* is not a problem to resolve — it is data: the arm-A-vs-arm-B
-disagreement rate on a criterion **is** the estimate of `j_c` for that criterion.
+Four rules:
 
-**The mode differs by output:**
+- **Keep each rubric definition simple and single-purpose.** Atomic evaluation prevents halo
+  effects and criterion conflation, and it makes per-rubric reliability computable — so you learn
+  *which* rubrics are unreliable instead of getting one uninterpretable number.
+- **The judge never sees the agent's answer or the annotation.** Blinding is what prevents
+  anchoring; skipping it is what makes reference-free judges generous.
+- **Runs on any instance**, annotated or not. This is the step that generalizes beyond the
+  annotated slice.
+- **Choose the rubric surface explicitly.** Two exist for ED and they are not the same thing: the
+  **18 `llm_raw` predicates** that drive the pipeline, versus `guideline_report`'s 61 facility +
+  17 professional criteria, which are display-derived. Judging the latter may be judging a
+  renderer. **Clinic's surface is not yet identified** ([[auto eval rollout plan]] 0.4).
 
-| output | mode | why |
+### Rubric output types, and their reliability
+
+Rubric results may be boolean, ordinal, categorical, or `ambiguous` — but the types are **not
+equally trustworthy**, and this should drive rubric design:
+
+| type | judge reliability (AutoRubric) | design implication |
 |---|---|---|
-| **class table** (§ 3.4) | require **both** arms (AND) | precision matters — a false class sends someone to rewrite a prompt for nothing |
-| **queue ranking** (§ 3.3) | **weighted sum**; agreement raises the score | recall matters — a hard AND discards single-arm conflicts that are often real |
+| **boolean** (Yes/No) | **87% exact, κ 0.642** | **prefer this.** Decompose toward binary wherever the guideline permits |
+| **ordinal** (3–5 levels) | 38–58% exact, but 85–93% adjacent, QWK 0.55–0.72 | usable for gross gaps, **not** for one-rung calls |
+| **categorical** | asymmetric — 0.70 recall on one class vs 0.14 on another | measure per class; do not trust a single aggregate |
+| **`ambiguous` / `CANNOT_ASSESS`** | — | **first-class output**, reported separately, never folded into Yes or No |
 
-**Caveat, the same one as for criteria:** arms are not independent — both are LLMs reading the
-same note and sharing blind spots — so two agreeing arms are worth *less* than 2× one arm. The
-correlation is measurable (arm-A/arm-B agreement on criteria where our pipeline is stable), so
-either estimate and discount it, or cap the multi-arm contribution. This is the
-Dawid–Skene-with-dependence item in [[auto eval proposal]] 6.1.
+### Rubric weights
 
-## Stage 2 — judge, on the surface that survived
+Each rubric needs a weight, and there are three options in increasing ambition:
 
-Stage 1 decides the surface. If level judging fails its kill switch, drop to the **criterion
-booleans** — the layer AutoRubric measured at κ 0.642 versus QWK ~0.55–0.72 for ordinals.
-
-- **One blinded call per criterion, per surviving arm.** Note + that single criterion's
-  definition. The judge never sees our answer. Atomic evaluation prevents halo effects and makes per-criterion reliability
-  computable.
-- **Diff against our output** per (encounter, criterion, arm).
-- **The output is a conflict with an address** — encounter, node, field, plus the span the judge
-  did and did not find. Not "this encounter looks wrong", which is unactionable.
-- **Runs on any encounter**, labelled or not. This is the step that generalizes beyond `gt.csv`.
-
-**Choosing the criterion surface, explicitly:** two exist and they are not the same thing — the
-**18 `llm_raw` booleans** that drive the pipeline, versus `guideline_report`'s 61 facility + 17
-professional criteria, which are display-derived. Judging the latter may be judging a renderer.
-
-## Stage 3 — aggregate and ship
-
-The findings table is one row per **(encounter, criterion, arm)**. It aggregates two ways, and
-**the second is worth more**:
-
-| aggregate down… | you get | value |
+| option | how | when |
 |---|---|---|
-| the **encounter** axis | a ranked review queue | helps a coder once, per chart |
-| the **criterion** axis | a defect **class** | one criterion conflicting on 40 charts is **one bad prompt** — fix once, all 40 improve |
+| **uniform** | every rubric weight 1 | **honest default.** Never wrong, just uninformative |
+| **manual** | domain owner assigns, including **negative** weights for rubrics whose truth should *reduce* the score | good where the guideline states relative importance; negative weights also counteract judge leniency |
+| **learned** | logistic regression of rubric results against human annotations | best in principle — **but see the caveat** |
 
-Ranking must use **reliability-weighted** conflicts, not raw counts (§ 3.3). Class discovery
-tests each criterion's conflict rate against its own noise floor (§ 3.4).
+**⚠ The learned option overfits at our n.** Fitting 18 rubric coefficients needs roughly 10 events
+per predictor — ~180 error events, i.e. ~900 instances at a 20% error rate. We have **62–71**
+annotated rows per axis, and **six rubrics have base rates under 2.5%**. So learned weights require
+L1/L2 regularization with nested cross-validation, or restriction to the handful of high-prevalence
+rubrics, and **uniform weights are the correct fallback** rather than an unregularized fit.
+
+A separate, label-free weighting is available and complements all three: discount each rubric by
+its **noise floor** `e_c` — how often a conflict on it arises from the agent's own instability or
+the judge's, rather than from an error. See § 3.3; it needs no annotations at all.
+
+### The rubric result table
+
+One per instance. This is Stage 2's output:
+
+| rubric | weight | Opus 5 | Gemini-3-Flash | GPT-5.4 |
+|---|---|---|---|---|
+| R1 | 10.0 | Yes | Yes | Yes |
+| R2 | 8.0 | moderate (0.75) | low (0.50) | high (1.00) |
+| R3 | −15.0 | No | No | **Yes** |
+
+Rows where judges disagree with each other measure **judge instability** (`j_c`, § 3.3). Rows
+where the judges agree with each other but disagree with the **agent** are the candidate defects.
+
+## Stage 3 · Aggregation
+
+Given the Stage-1 calibration table and the Stage-2 rubric tables, three outputs follow.
+
+### (1) Judge quality
+
+Inter-judge correlation and per-rubric agreement — raw agreement, Cohen's κ, Gwet's AC1 and the
+marginal prevalence **together** ([[LLM as a judge SOTA]] §8); quadratic-weighted κ for ordinals.
+Two uses: it validates the Stage-1 ranking out-of-sample, and the arm-vs-arm disagreement rate on
+a rubric **is** the estimate of that rubric's judge instability `j_c`.
+
+### (2) A per-instance score, for review triage
+
+Combine judge weights × rubric weights × rubric results into one score per instance, then rank.
+The principled form is a **log-odds sum** over the conflicts that fired (§ 3.3), which handles
+multiple judges by construction: two arms conflicting on the same rubric contributes roughly twice
+the evidence of one. Validate the ranking against the annotated slice as **lift over random
+ordering** (§ 3.4) — and state its MDE, because at small n a modest lift is invisible.
+
+The ranked queue is what a coder receives; **it also collects the annotations** that upgrade the
+weights (§ Stage 3 artifacts below).
+
+### (3) Defect classes
+
+Aggregate the same table down the **rubric** axis instead of the instance axis. One rubric
+conflicting across 40 instances is **one faulty prompt**, not 40 faulty instances — worth more than
+any individual chart, and it enters the existing RCA → `causes.json` → changelog path. The test for
+"class, not noise" is a one-sided binomial against that rubric's noise floor `e_c`, plus a
+direction-asymmetry check (§ 3.4).
+
+**This is usually the higher-value output**, and it is the one that survives the move to
+un-annotated data intact.
 
 ### The four artifacts
 
 | artifact | unit | ids | audience |
 |---|---|---|---|
-| `findings.json` | (encounter, criterion, arm) conflict | yes | machine; feeds the rest |
-| `queue.csv` | encounter, ranked | yes | **the coder** |
-| `calibration.json` | (judge model × axis × criterion) | no | provenance; **gates the other three** |
+| `findings.json` | (instance, rubric, judge) conflict | yes | machine; feeds the rest |
+| `queue.csv` | instance, ranked | yes | **the coder** |
+| `calibration.json` | (judge × axis × rubric) | no | provenance; **gates the other three** |
 | `autoeval-<dataset>.md` | population | **no** | product + research; shareable |
 
-Same ids-split discipline as `docs/EVALUATION.md`: per-encounter artifacts stay internal, the
+Same ids-split discipline as `docs/EVALUATION.md`: per-instance artifacts stay internal, the
 population artifact can leave the room.
 
-### The queue is also the label-collection instrument
-
-A row reading "encounter `944069156`, score 3.2" wastes the coder's time — they would re-read the
-whole chart. Every row carries localized evidence plus a slot for the verdict:
+**The queue is also the label-collection instrument.** A row reading "instance X, score 3.2" wastes
+the coder's time — they would re-read the whole chart. Every row carries localized evidence plus a
+verdict slot:
 
     enc_id, rank, score, axis, our_value, direction,
-    criteria_conflicted,      # e.g. behavioral_health_safety_assessment
-    our_span,                 # what we cited
+    rubrics_conflicted,       # e.g. behavioral_health_safety_assessment
+    our_span,                 # what the agent cited
     judge_span,               # what the judge found, or NONE
     arms_confirming,          # "2 of 2"  <- the judge-noise strip
     coder_verdict,            # [ ours | judge | ambiguous ]   <- THEY fill this in
     coder_note
 
-**`coder_verdict` closes the loop.** It is the adjudication sample that estimates `d_c` — the
-quantity § 3.3 shows is otherwise unmeasurable. A coder working the queue produces it as a
-by-product. Design the queue without it and the review is paid for twice. It also supplies the
-funnel's last two stages (§ 3.2): `ambiguous` verdicts are the label-ambiguity population, and
-coder-vs-coder disagreement on double-reviewed rows is the ambiguity *rate*.
+`coder_verdict` closes the loop: it is the adjudication sample that estimates `d_c` (§ 3.3) and
+supplies the ambiguity rate for the cause funnel (§ 3.2). Design the queue without it and the
+review is paid for twice.
 
-### Choosing the flag budget `k`
+**Choosing the flag budget `k`:** capacity-bound for v1 (`k = coder_hours / minutes_per_review`),
+with the precision curve plotted so a reader can see where it crosses the base error rate;
+conformal risk control later ([[auto eval proposal]] 6.2).
 
-| approach | rule | when |
-|---|---|---|
-| **capacity-bound** | `k = coder_hours / minutes_per_review` | **v1.** It is what actually constrains us |
-| precision floor | stop where precision@k falls to the base error rate | diagnostic — beyond it you are doing random review |
-| conformal risk control | pick `k` s.t. recall ≥ X at 90% confidence, finite-sample valid | later ([[auto eval proposal]] 6.2) |
+## Auto-eval — applying the calibrated judges to un-annotated data
 
-Ship capacity-bound, and **plot where the precision curve crosses the base rate** so a reader can
-judge whether the budget is well chosen.
+The purpose of the whole method: Stages 1–3 consume annotations; the calibrated result runs where
+there are none. What transfers is **not uniform**, and conflating the categories is how auto-eval
+becomes fiction.
 
----
-
-## Applying the calibrated method to unlabelled data
-
-Not a fourth stage — the *deployment* of the three. Stages 1–3 consume labels; the calibrated
-result is meant to run where there are none, which is the purpose of the whole method. What transfers is not uniform, and conflating the categories is how auto-eval becomes
-fiction.
-
-| | on an unlabelled set |
+| | on an un-annotated set |
 |---|---|
 | judge selection (surviving arms) | transfers, subject to shift |
-| **`q₀` / `q₁`** | transfers **by assumption** — not re-measurable without labels |
-| **`e_c`** (per-criterion noise floor) | **re-measurable directly** — built from our self-flip rate and judge instability, neither of which needs labels |
-| **ranked queue (ordering)** | ✅ fully — needs only `e_c` |
-| **class discovery** (binomial vs `e_c`, § 3.4) | ✅ **fully label-free — the strongest transfer in the method** |
-| **lift / catch rate** | ❌ **not measurable** — both `precision@k` and the base error rate need labels |
+| **`q₀` / `q₁`**, judge weights | transfers **by assumption** — not re-measurable |
+| **`e_c`** (per-rubric noise floor) | **re-measurable directly** — built from agent self-flip and judge instability, neither needing annotations |
+| **per-instance score (ordering)** | ✅ fully — needs only `e_c` |
+| **defect classes** (binomial vs `e_c`) | ✅ **fully label-free — the strongest transfer in the method** |
+| **lift / catch rate** | ❌ **not measurable** — both terms need annotations |
 | accuracy | ❌ never, by design |
 
-The asymmetry to internalize: **class discovery survives the move almost intact; every
-quantitative claim about the queue does not.** On a new customer slice, *"criterion X conflicts on
-40 charts, well above its noise floor"* is defensible. *"This queue catches 60% of errors"* is a
-transferred assumption wearing a number's clothing.
+The asymmetry to internalize: **defect-class discovery survives the move almost intact; every
+quantitative claim about the queue does not.** *"Rubric X conflicts on 40 charts, above its noise
+floor"* is defensible. *"This queue catches 60% of errors"* is a transferred assumption wearing a
+number's clothing.
 
-### The named failure mode: distribution shift
+**The named failure mode is distribution shift.** Calibration was measured on one customer's
+documentation; on a new slice the templates, habits and case mix differ, so both the base error
+rate and the judge's competence move. The literature names it: the bias-corrected estimator "fails
+under realistic shifts where test and calibration distributions have different true accuracy
+rates", and PPI requires the two sets be i.i.d. ([[LLM as a judge SOTA]] §6).
 
-Calibration was measured on one customer's notes. On a new slice the EHR templates, documentation
-habits and case mix all differ, so the base error rate *and* the judge's competence move. The
-literature names this exactly: the bias-corrected estimator "fails under realistic shifts where
-test and calibration distributions have different true accuracy rates", and PPI requires the
-labelled and unlabelled sets be i.i.d. — no covariate or label shift
-([[LLM as a judge SOTA]] §6).
-
-### Four sentinels that detect broken transfer, all label-free
-
-Lift cannot be measured on the new set, but *whether the calibration still applies* can be:
+**Four sentinels detect broken transfer, all label-free:**
 
 | # | sentinel | reads as |
 |---|---|---|
-| 1 | **Input-adequacy shift** — note-length distribution, template artifacts, null channels, section headers ([[auto eval plan]] tier 0) | if the input distribution moved, transfer is suspect before anything else is examined |
-| 2 | **`CANNOT_ASSESS` rate** vs the calibration set | a jump means the judge is out of its depth on these notes |
-| 3 | **Arm–arm agreement** vs the calibration set | a collapse means the judges are guessing |
-| 4 | **`e_c` recomputed** on the new slice | if self-flip or judge instability moved, **recompute the weights** rather than transferring them |
+| 1 | **input-adequacy shift** — length distribution, template artifacts, null channels ([[auto eval plan]] tier 0) | if the input distribution moved, transfer is suspect before anything else is examined |
+| 2 | **`CANNOT_ASSESS` rate** vs calibration | a jump means the judge is out of its depth here |
+| 3 | **arm–arm agreement** vs calibration | a collapse means the judges are guessing |
+| 4 | **`e_c` recomputed** on the slice | if it moved, **recompute the weights** rather than transferring them |
 
-Sentinels 2 and 3 are the useful pair — both computable on any unlabelled data, both proxies for
-"the judge no longer knows what it is doing here."
-
-### The upgrade path: a small anchor sample
-
-For an actual number on unlabelled data, label **30–50 encounters** of the slice. That is the PPI
-setup: a small human-labelled sample plus the large judged set gives an **unbiased** population
-estimate regardless of the judge's error profile, and at ρ≈0.6 those 50 labels behave like ~78
+**For an actual number, add an anchor sample.** Annotate **30–50 instances** of the slice and use
+PPI: a small annotated sample plus the large judged set gives an **unbiased** population estimate
+regardless of the judge's error profile, and at ρ≈0.6 those 50 behave like ~78
 ([[LLM as a judge SOTA]] §6). This is the only honest route from a judge to a reported figure on
-new data, and it is cheap enough to be routine per slice.
+new data.
 
-### What an unlabelled-run report may say
+**What an un-annotated run may report:**
 
-> Ranked 850 encounters; flagged the top 128. **Ordering and class findings are computed on this
+> Ranked 850 instances; flagged the top 128. **Ordering and class findings are computed on this
 > slice; the lift figure (2.9×) is carried over from `washington-402` calibration and is not
 > measured here.** Judge `CANNOT_ASSESS` 4.1% vs 3.8% at calibration; arm agreement 0.81 vs 0.84 —
-> both within tolerance, so transfer is plausible. Three criterion classes exceed their noise
-> floor.
+> both within tolerance, so transfer is plausible. Three rubric classes exceed their noise floor.
 
-That is a defensible artifact. The same report stating "lift 2.9×" bare, as though measured, is
-not. And the frozen-detector rule applies here specifically: a detector used on unlabelled data is
-**version-pinned**, and re-validated whenever the judge prompt, the pipeline prompt, or the
-provider snapshot changes ([[auto eval proposal]] §4 C-7, C-10).
+The same report stating "lift 2.9×" bare, as though measured, is not defensible. And the
+frozen-detector rule applies here specifically: a detector used on un-annotated data is
+**version-pinned** and re-validated whenever the judge prompt, the agent prompt, or the provider
+snapshot changes ([[auto eval proposal]] §4 C-7, C-10).
 
 ---
 
