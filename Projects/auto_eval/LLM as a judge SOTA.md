@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-17
+updated: 2026-08-19
 tags: [reference, coding-pod, eval, auto-eval, llm-as-judge]
 ---
 # SOTA — LLM-as-a-judge, and what each finding does to our design
@@ -205,6 +205,57 @@ on models as small as Mistral-7B. Thresholds are then calibrated by **fixed-sequ
 on a calibration set (they used |D_cal| = 500, δ = 0.1) with exact binomial upper bounds —
 tested from λ=0.999 downward until the bound clears α.
 
+**What the "exact binomial upper bound" is doing.** The whole guarantee rests on this one
+step, so it is worth spelling out. Take an illustrative calibration row (numbers mine, not the
+paper's): at some candidate threshold λ, 274 of the 500 calibration instances clear it and 25
+of those disagree with the human. The point estimate is 25/274 = **9.1% disagreement, i.e.
+90.9% agreement — which looks like a pass against a 90% target.** It is not treated as one.
+The procedure instead asks:
+
+> How bad would the true disagreement rate have to be before "we only saw 25" becomes a fluke
+> we can dismiss?
+
+For any candidate truth `p`, the probability of seeing 25 or fewer disagreements in 274 draws
+is the binomial CDF — `P(X ≤ 25) = Σ(i=0..25) C(274,i) · p^i · (1−p)^(274−i)`:
+
+| if the truth were p | P(≤ 25 disagreements in 274) | verdict |
+|---|---|---|
+| 9.12% (= the point estimate) | 55.4% | entirely consistent |
+| 10% | 36.0% | consistent |
+| **11.77%** | **10.0%** ← lands exactly on δ | **the edge of consistent** |
+| 13% | 3.0% | strained |
+| 14% | 0.96% | dismiss |
+| 16% | 0.07% | dismiss |
+
+**11.77% is the worst truth the evidence cannot rule out**, and that — not the 9.1% observed —
+is what gets compared to α. 11.77% > 10%, so this λ fails and the walk stops at a tighter
+threshold. Certification runs against the worst world still consistent with your data, which
+is precisely why it yields a guarantee rather than a hope.
+
+**Computing it.** The CDF is strictly decreasing in `p` (a worse truth makes "only 25" less
+likely), so the root is unique and bisection lands it in ~20 iterations. Closed form, same
+answer: `p_upper = BetaInv(1−δ; k+1, n−k)`, i.e. `scipy.stats.beta.ppf(0.9, 26, 249)`. The one
+case that solves algebraically is **k = 0**, where the sum collapses to a single term:
+`(1−p)^n = δ ⟹ p_upper = 1 − δ^(1/n)`.
+
+**What α and δ each range over** — they are not the same kind of number, and neither one is a
+confidence score. `confidence(x)` is the per-instance Simulated-Annotators ratio, recomputed
+for every instance and compared against λ. `1−α` is a population quantity: over fresh test
+instances, conditional on not abstaining. **`1−δ` is over draws of the calibration set.** Once
+λ̂ is picked from one particular D_cal, the true agreement rate at λ̂ is a fixed unknown number;
+what is random is which λ̂ you got. The guarantee says that across resampled calibration sets,
+at least 1−δ of them yield a λ̂ that genuinely clears the target — and the other δ are draws
+that happened to look clean and shipped a threshold that is too loose, undetectably so until
+production. That is exactly what the **guarantee held** column below measures, which is why
+90.8% against δ = 0.1 is the expected result and not a near-miss.
+
+**Why "exact" and not the normal approximation.** In the row above, Wald gives 11.35% against
+the exact 11.77% — same verdict, mild optimism. At the sample sizes we would actually operate
+at, Wald breaks outright: with **0 disagreements in 15**, `p̂ = 0` collapses the standard error
+and Wald returns an upper bound of **0%**. The exact bound returns **14.2%** (`1 − 0.1^(1/15)`)
+— 15 clean instances genuinely cannot rule out a 14% error rate. Near-zero error rates at
+small n is exactly the corner we would live in, and exactly where the approximation is worthless.
+
 **The cascade.** Cheapest judge first; escalate only on low confidence; each stage's threshold
 calibrated on the instances prior stages abstained on, with a union bound preserving the
 overall guarantee.
@@ -237,7 +288,13 @@ machinery we already have:
   diversity we have not collected, and our 3-vote / cross-family dissent (WS-A3) is the
   closest substitute we own.
 - 500 calibration instances vs our 71 per axis. Same wall as [[auto eval proposal]] §3.1, reached from
-  a different direction — which is corroboration, not coincidence.
+  a different direction — which is corroboration, not coincidence. The arithmetic is
+  unforgiving: from `1 − δ^(1/n) ≤ α`, certifying a 90% target at δ = 0.1 needs **≥ 22 instances
+  clearing the threshold with zero disagreements**, and any disagreement raises the bar
+  further. With 71 rows total, a threshold tight enough to come back clean keeps too few rows,
+  and one loose enough to keep 22+ admits errors. Worth naming *how* this fails: not as a
+  broken guarantee but as **coverage collapsing toward zero** — the procedure certifies no λ at
+  all and the judge abstains on everything. Useless, but failing on the safe side.
 
 Adjacent work worth a look if we pursue this: margin-adaptive confidence ranking, conformal
 Elo for calibrated rankings, and deferral-specialization for judge cascades.
