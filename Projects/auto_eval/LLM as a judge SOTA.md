@@ -166,17 +166,17 @@ than as our caution.
 Consolidated from [the survey](https://arxiv.org/html/2411.15594v6) and AutoRubric's
 ablations. The right-hand column is what we would actually do.
 
-| bias | mechanism | mitigation | applies to us? |
-|---|---|---|---|
-| **Position** | verdict tracks presentation order | swap and average; deterministic per-eval option shuffling; mark conflicts as tie | **yes** — C4 adjudication sees two arms |
-| **Self-enhancement** | model prefers its own output | cross-family judge; blinding | **yes, acutely in clinic** |
-| **Verbosity / length** | longer = better | multi-source averaging; offset-bias data | mild — our outputs are structured |
-| **Concreteness** | specific-sounding claims over-credited | offset-bias training data | **yes** — our `evidence` strings are quotes, and 29.8% are not verbatim |
-| **Reference dependency** | verdict swings on reference presence | reference-drop paradigm | **yes** — §2 |
-| **Format** | schema/style preference | forced tool schema (we already do this) | handled |
-| **Calibration drift** | judge strictness moves over time / versions | version pinning; periodic re-validation | **yes** — provider snapshots rotate |
-| **Leniency** | default to crediting | negative weights; directional prompting | **yes** |
-| **Evaluator hallucination** | judge fabricates flaws in the candidate | require a span pointer per finding | **yes** — and we already have this rule |
+| bias                        | mechanism                                   | mitigation                                                                       | applies to us?                                                          |
+| --------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| **Position**                | verdict tracks presentation order           | swap and average; deterministic per-eval option shuffling; mark conflicts as tie | **yes** — C4 adjudication sees two arms                                 |
+| **Self-enhancement**        | model prefers its own output                | cross-family judge; blinding                                                     | **yes, acutely in clinic**                                              |
+| **Verbosity / length**      | longer = better                             | multi-source averaging; offset-bias data                                         | mild — our outputs are structured                                       |
+| **Concreteness**            | specific-sounding claims over-credited      | offset-bias training data                                                        | **yes** — our `evidence` strings are quotes, and 29.8% are not verbatim |
+| **Reference dependency**    | verdict swings on reference presence        | reference-drop paradigm                                                          | **yes** — §2                                                            |
+| **Format**                  | schema/style preference                     | forced tool schema (we already do this)                                          | handled                                                                 |
+| **Calibration drift**       | judge strictness moves over time / versions | version pinning; periodic re-validation                                          | **yes** — provider snapshots rotate                                     |
+| **Leniency**                | default to crediting                        | negative weights; directional prompting                                          | **yes**                                                                 |
+| **Evaluator hallucination** | judge fabricates flaws in the candidate     | require a span pointer per finding                                               | **yes** — and we already have this rule                                 |
 
 The survey's own honest note: for self-enhancement bias it does **not** offer a validated
 mitigation. Cross-family judging is a structural workaround, not a fix.
