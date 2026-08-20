@@ -129,7 +129,7 @@ The ordering is the proposal's main claim.
 
 **The line, and it is load-bearing.** Auto-eval **never replaces `gt.csv` as the accuracy
 measurement.** A judge-derived accuracy is biased by the judge's own error profile, and in
-the reference-free setting the bias direction is *known*: judges over-credit the answer they
+the reference-free setting the bias directionwhy  is *known*: judges over-credit the answer they
 are shown, and supplying a reference flips up to **85%** of verdicts
 ([Kranti & Vajjala 2026](https://arxiv.org/abs/2607.12885)). Cross this line and
 `docs/EVALUATION.md`'s two-artifact contract collapses into a model grading its own
