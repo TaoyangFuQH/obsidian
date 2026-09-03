@@ -73,11 +73,123 @@ deployments `temporal-workers-high`/`-low`).
 **Every new code push to the PR branch = repeat steps 2–4** (re-point → re-dispatch →
 re-verify roll) before re-testing.
 
+### If your diff touches mvp-proxy — read this first
+
+`Deploy MVP Proxy Service` writes the **same shared** `qh-customer/overlays/clinical`
+kustomization the workers use, so one tag change lands on **every clinical tenant**, not
+just `qhai-com`. There is no per-tenant scoping.
+
+**The clinical MVP DB is pinned to `release`.** Its `alembic_version` sits at a revision
+whose migration file exists *only* on `release` (added by a commit literally titled
+"REVERT BEFORE MERGING TO PROD"). Any mvp-proxy image built from `develop` or a feature
+branch therefore dies in its `db-migrations` init container:
+
+```
+FAILED: Can't locate revision identified by '<rev>'
+```
+
+The failure mode is quiet: the tag flips in the deployment spec, but every new pod is
+`Init:Error` and the **old pods keep serving**. So it isn't an outage — but the rollout
+never converges, and mvp-proxy can no longer restart or scale until it's fixed.
+
+```bash
+# check the CURRENTLY-SERVING image, not the spec
+kubectl -n qh get pods -l app=mvp-proxy \
+  -o custom-columns='POD:.metadata.name,READY:.status.containerStatuses[0].ready,TAG:.spec.containers[0].image'
+kubectl -n qh logs <pod> -c db-migrations --tail=20    # exit 0 + no "Running upgrade" = clean
+```
+
+Two ways out: deploy mvp-proxy from **`release`**, or cherry-pick the missing migration
+file onto your pointer branch (`git checkout origin/release -- <path-to-migration>`) —
+fine on a throwaway pointer branch that never merges. Verify the chain has a single head
+before deploying.
+
 ---
 
 ## Part 2 — DB / config (skip if pure code)
 
-Only needed if the PR requires a DAG/config change. Config lives in `workflows.composer_metadata.temporal_config` (JSONB), read **at dispatch** — set it **before** feeding, and resolve the composer row by `id` first (a wrong `org_id`/`workflow_code` in a `WHERE` is a silent no-op). See the Notion runbook for the exact SQL if this applies.
+Only needed if the PR requires a DAG/config change. Two things live here, both read
+**at dispatch** — set them **before** feeding, never during.
+
+### Getting a psql session (the part that isn't obvious)
+
+The workflow tables are in the **tenant MVP DB**, which lives in the **customer** cluster —
+`qh-clinical-customer-qhai`, *not* `qh-clinical-platform`. The platform DB (`qh-db`, behind
+`platform-cloudsqlproxy`) has **no `workflows` schema at all**; querying it just returns
+`relation "workflows.composer_metadata" does not exist`, which reads like a permissions
+problem and isn't. The temporal workers themselves hold no DB credentials — they reach
+tenant data over HTTP via `mvp-proxy`, so there's nothing to copy from their env.
+
+```bash
+gcloud container clusters get-credentials qh-clinical-customer-qhai \
+  --region us-central1 --project qh-clinical --internal-ip
+kubectl --context gke_qh-clinical_us-central1_qh-clinical-customer-qhai \
+  -n qh port-forward svc/mvp-cloudsqlproxy 5434:5432    # leave running
+```
+
+Credentials are in the `mvp-db` secret in that namespace (`POSTGRES_USER=qhai-com-postgres`,
+`POSTGRES_DB=qh_mvp_db`, `POSTGRES_PASSWORD`). Pull them into the process env rather than
+pasting them anywhere:
+
+```bash
+CTX=gke_qh-clinical_us-central1_qh-clinical-customer-qhai
+d() { kubectl --context $CTX -n qh get secret mvp-db -o jsonpath="{.data.$1}" | base64 -d; }
+PGPASSWORD="$(d POSTGRES_PASSWORD)" psql \
+  "host=127.0.0.1 port=5434 dbname=$(d POSTGRES_DB) user=$(d POSTGRES_USER) sslmode=disable" -w
+```
+
+**Use `-w`.** Without it psql prompts for a password, and with no tty it hangs forever
+instead of erroring — looks like a network problem, isn't. The tunnel also drops on its
+own (`error: lost connection to pod`); just restart the port-forward.
+
+### 2a) `composer_metadata.temporal_config` (JSONB)
+
+Resolve the composer row **once** and operate on its `id` — a wrong `org_id`/`workflow_code`
+in a `WHERE` is a silent no-op, so confirm you matched exactly one row. Save the whole
+JSONB first; that's your rollback.
+
+```sql
+SELECT id, workflow_code, org_id, temporal_config
+  FROM workflows.composer_metadata
+ WHERE workflow_code = 'clinical-coding' AND COALESCE(is_deleted,false) = false;
+-- expect EXACTLY 1 row; save temporal_config verbatim before editing
+
+UPDATE workflows.composer_metadata
+   SET temporal_config = temporal_config || '{"<key>": <value>}'::jsonb,
+       updated_at = now()
+ WHERE id = '<id>';
+```
+
+Merging with `||` preserves every other key. Diff the full JSONB before/after and check the
+key count is unchanged — that catches a fat-fingered overwrite that a spot-check misses.
+
+> **The DB overrides the code default.** `migrate_v0_to_v1.sql` already wrote
+> `abstention_enabled: false` / `abstention_policy: "qh_high"` into this row, and the
+> composer value wins over whatever the code ships as its default. So deploying a PR that
+> changes a default is **not** enough to exercise it — you must write the key here too.
+
+### 2b) The DAG template (`dag_templates.dag_nodes`)
+
+Only if the PR changes `dag/template_v1.json`. The active template is found through
+`dag_template_mappings` — note the column is **`status = 'active'`**, there is no
+`is_active`:
+
+```sql
+SELECT t.id, t.name, t.version_major||'.'||t.version_minor AS ver,
+       jsonb_array_length(t.dag_nodes) AS nodes, m.status
+  FROM workflows.dag_template_mappings m
+  JOIN workflows.dag_templates t ON t.id = m.dag_template_id
+ WHERE m.composer_metadata_id = '<composer id>' AND COALESCE(m.is_deleted,false) = false;
+```
+
+Prefer a **single indexed node write** over replacing the whole array — diff the repo
+template against `dag_nodes` first, confirm only the node(s) you expect differ, then
+`jsonb_set(dag_nodes, '{<idx>}', '<node>'::jsonb)`. Read back and re-diff.
+
+> **`arg_keys` resolve positionally.** The DAG passes exactly `len(arg_keys)` positional
+> args to the activity, so a template listing a key the deployed code doesn't accept fails
+> the terminal node. **Deploy the code first, then reseed the template** — never the
+> reverse — and restore the template before rolling the pointer branch back.
 
 ---
 
