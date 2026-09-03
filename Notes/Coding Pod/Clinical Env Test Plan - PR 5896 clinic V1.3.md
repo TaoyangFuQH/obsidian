@@ -47,10 +47,15 @@ applies. Consequences for this PR:
    a **seed file** — it must be loaded into `workflows.composer_metadata.temporal_config`
    per composer to take effect.
 
-So on `clinical` today, abstention will be **off** (or `unanimous`) regardless of the code.
-Phase B must set the config explicitly. Worth fixing in the PR as well — either hoist the
-new default or drop the ineffective kwarg/const changes so the diff does not imply
-behaviour it cannot deliver.
+**Fixed in `b21048c`** — the hoist fallback is now per-`workflow_code`, so a composer with
+no abstention keys gets clinic's `consensus_or_corroborated`, and one with only
+`abstention_enabled=true` no longer silently runs ED's `unanimous`. ED unchanged.
+
+⚠️ **But Phase B still needs the DB write.** `migrate_v0_to_v1.sql` already wrote
+`abstention_enabled: false` / `abstention_policy: "qh_high"` into
+`composer_metadata.temporal_config` as a full overwrite, and the composer value overrides
+the code default. So on the likely `clinical` state the gate stays **off** after deploying —
+Part 2 below is required, not optional.
 
 ## Scope
 
