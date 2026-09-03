@@ -318,7 +318,20 @@ rollback SHA if you're done testing. Consider a follow-up note in
 - Every new commit on the PR branch requires a full re-point → re-dispatch → re-verify-roll
   cycle before re-testing — the pointer doesn't auto-follow the PR branch.
 - A green deploy Action ≠ rolled out — always confirm via `kubectl rollout status` before
-  feeding data.
+  feeding data. And `rollout status` can itself time out while the deployment *spec* already
+  shows the new tag: check the **READY pods'** image, which is the only thing that reflects
+  what is actually executing.
+- **A `release` push auto-deploys to clinical and will clobber your pointer deploy.**
+  `set-environment` maps `release` → `["clinical","staging"]`, and the GitOps `newTag` is a
+  single scalar with no locking — last writer wins. `#clinical-env-timeshare` only coordinates
+  humans running dispatches; the release pipeline doesn't participate. Re-check the serving
+  tag **after** your test finishes, not just before — if it moved mid-run, those results are
+  mixed-code and have to be discarded.
+- **Mid-rollout = mixed code.** During a rolling update old and new pods are both Ready and
+  both polling the same task queue, so an encounter fed then may execute on either image.
+  Wait until every ready worker pod reports a single tag before feeding.
+- Worker deploys reach **all** clinical clusters (platform + every customer cluster) —
+  `push-to-repo-customer` writes one shared overlay.
 - Two similarly-named buckets per workflow — `...-composer-data-files/<workflow>/` (CSV drop
   zone) vs `...-composer-<workflow>-datafiles` (per-encounter output artifacts). Confirm by
   listing contents, don't assume from the name.
