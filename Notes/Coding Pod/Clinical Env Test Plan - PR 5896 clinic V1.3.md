@@ -243,3 +243,157 @@ policy abstention — see the known contamination below.
 ## Log
 
 _(append per round: suffix, pointer SHA, Actions run id, image tag, result per encounter)_
+
+---
+
+# Appendix — Enabling `consensus_or_corroborated` after the deploy
+
+Deploying the PR is **not** sufficient (see the blocker section above). This is the ordered
+procedure. Do it per environment; `clinical` first, then production.
+
+## Step 0 — Prerequisite: verifier credentials must exist in the target cluster
+
+`consensus_or_corroborated` calls **GPT-5.4 and Gemini on every encounter**. The clinic
+verifier reads exactly the same env vars as the ED verifier:
+
+```
+AZURE_GPT_54_OPENAI_ENDPOINT
+AZURE_GPT_54_OPENAI_API_VERSION
+AZURE_GPT_54_OPENAI_DEPLOYMENT
+AZURE_GPT_54_OPENAI_API_KEY
+GOOGLE_GEMINI_API_KEY          (preferred)  — or VERTEX_PROJECT + ADC
+```
+
+⚠️ **If any are missing the gate does not crash — it abstains on everything.** A missing key
+raises inside `_safe`, which returns `{"error": ...}`, and a failed verifier is treated as
+"does not confirm". Observed offline: one draw with 45 GPT + 64 Gemini errors produced 32
+`both_verifiers_failed` abstentions and coverage collapsed 88% → 59%, with no error surfaced
+anywhere else. **Verify before flipping the config, not after.**
+
+```bash
+kubectl -n qh get deploy temporal-workers-high -o json \
+  | jq -r '.spec.template.spec.containers[0].env[]?.name' | grep -E 'AZURE_GPT_54|GEMINI|VERTEX'
+kubectl -n qh get deploy temporal-workers-high -o json \
+  | jq -r '.spec.template.spec.containers[0].envFrom[]?.secretRef.name'
+# then confirm the referenced secret actually carries the keys
+kubectl -n qh get secret <name> -o json | jq -r '.data | keys[]' | grep -E 'AZURE_GPT_54|GEMINI|VERTEX'
+```
+If they are absent, stop — wiring them is a separate change.
+
+## Step 1 — Deploy the code first
+
+The code must be live before the config points at a policy it does not know. An unknown
+`abstention_policy` falls back to `DEFAULT_POLICY` with a warning, so a config-first order
+would silently run the wrong policy for the gap.
+
+Deploy per Part 1 above, and confirm `kubectl rollout status` on both worker deployments.
+
+## Step 2 — Find the row and save the current value
+
+Resolve by `id`. The v1 migration keys on `workflow_code + org_id + is_deleted`, so a
+multi-org install has **one row per org** — check the count before assuming a single row.
+
+```sql
+SELECT id, org_id,
+       temporal_config -> 'abstention_enabled' AS enabled,
+       temporal_config -> 'abstention_policy'  AS policy
+  FROM workflows.composer_metadata
+ WHERE workflow_code = 'clinical-coding'
+   AND is_deleted = false;
+```
+
+Record the full `temporal_config` for each row you intend to touch — that is the rollback:
+
+```sql
+SELECT id, temporal_config FROM workflows.composer_metadata WHERE id = '<id>';
+```
+
+## Step 3 — Patch the two keys, by `id`
+
+`||` merges, so nothing else in the JSONB is disturbed. One statement per row.
+
+```sql
+UPDATE workflows.composer_metadata
+   SET temporal_config = temporal_config
+       || '{"abstention_enabled": true, "abstention_policy": "consensus_or_corroborated"}'::jsonb,
+       updated_at = now()
+ WHERE id = '<id>';
+```
+
+⚠️ Do **not** use `SET temporal_config = '<whole json>'` — a full overwrite is how the
+existing `false` / `qh_high` values got there, and it would drop any drift since the seed.
+
+Confirm the write landed and nothing else moved:
+
+```sql
+SELECT temporal_config -> 'abstention_enabled' AS enabled,
+       temporal_config -> 'abstention_policy'  AS policy,
+       temporal_config -> 'llm_model'          AS model,
+       temporal_config -> 'ensemble_votes'     AS votes
+  FROM workflows.composer_metadata WHERE id = '<id>';
+```
+
+## Step 4 — Smoke ONE encounter before opening the tap
+
+`temporal_config` is read **at dispatch**, so the next encounter fed picks it up. Feed a
+single encounter with a fresh id suffix and check the gate actually ran:
+
+```sql
+SELECT external_id,
+       result_json -> 'abstention' AS abstention,
+       result_json -> 'ai_professional_code' AS em_code
+  FROM workflows.workflow_run
+ WHERE external_id LIKE '%<your-suffix>%';
+```
+
+Pass conditions — all four:
+
+| check | expected |
+| --- | --- |
+| `abstention.policy` | `consensus_or_corroborated` — **not** `unanimous`, not `qh_high` |
+| `abstention.verdict` | `AUTO_ACCEPTED` or `NEEDS_REVIEW` — **not** `SKIPPED` |
+| `abstention.gpt_error` | `null` |
+| `abstention.gemini_error` | `null` |
+
+A `SKIPPED` verdict means the config did not take (wrong row, or dispatch predates the
+write). Non-null verifier errors mean Step 0 was not actually satisfied — **roll back rather
+than proceed**, because coverage will be destroyed while accuracy looks fine.
+
+## Step 5 — Watch the first real batch
+
+The thing to watch is **coverage**, not accuracy. Expect roughly **88%** of encounters with
+an E/M to be auto-accepted, i.e. ~12% routed to human review. Offline, on the shipped code
+path: 88.4% coverage / 94.7% accepted accuracy on the 177 set, 88.4% / 95.2% on the holdout.
+
+```sql
+SELECT count(*)                                                        AS n,
+       count(*) FILTER (WHERE result_json #>> '{abstention,verdict}' = 'AUTO_ACCEPTED') AS accepted,
+       count(*) FILTER (WHERE result_json #>> '{abstention,verdict}' = 'NEEDS_REVIEW')  AS review,
+       count(*) FILTER (WHERE result_json #>> '{abstention,gpt_error}'    IS NOT NULL)  AS gpt_err,
+       count(*) FILTER (WHERE result_json #>> '{abstention,gemini_error}' IS NOT NULL)  AS gem_err
+  FROM workflows.workflow_run
+ WHERE run_end_time > now() - interval '1 hour' AND result_json IS NOT NULL;
+```
+
+⚠️ **If `review` is far above ~12%, check `gpt_err` / `gem_err` before concluding the policy
+is wrong.** Verifier failures are indistinguishable from policy abstentions in the coverage
+number — that is the single most misleading failure mode of this feature.
+
+Also expect **per-encounter model cost to rise from ~$0.76 to ~$1.01** (3 Claude + 1 GPT +
+1 Gemini).
+
+## Rollback
+
+One statement, using the value saved in Step 2:
+
+```sql
+UPDATE workflows.composer_metadata
+   SET temporal_config = temporal_config
+       || '{"abstention_enabled": false}'::jsonb,
+       updated_at = now()
+ WHERE id = '<id>';
+```
+
+Takes effect on the next dispatch; no redeploy needed, and in-flight workflows are
+unaffected. Setting `abstention_enabled=false` is enough — leaving the policy key in place
+is harmless and keeps the intended value recorded for the next attempt.
