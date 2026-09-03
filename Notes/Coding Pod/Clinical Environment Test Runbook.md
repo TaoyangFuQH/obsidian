@@ -1,5 +1,5 @@
 ---
-updated: 2026-07-24
+updated: 2026-09-03
 tags: [runbook, coding-pod]
 ---
 # Test a PR on the `clinical` Environment
