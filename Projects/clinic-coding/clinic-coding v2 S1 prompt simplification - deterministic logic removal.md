@@ -314,6 +314,7 @@ together with the vote-key replacement rather than as an incremental trim.
 ## 11 · Related
 
 - [[clinic-coding v2 prompt decomposition plan]] — investigation, evidence, prompt anatomy
+- [[clinic-coding v2 S2 prompt decomposition]] — the next stage; land S1 before starting it
 - [[clinical-coding-v1]] · [[clinical-coding-v2]]
 - [[coding-ai-harness-synthetic-prolonged]] — harness run mechanics, cache and cost gotchas
   *(Claude memory file, not a vault note — key points inlined in this note)*

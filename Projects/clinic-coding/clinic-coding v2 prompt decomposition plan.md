@@ -308,6 +308,7 @@ hospital-follow-up rules. Needs an RCM answer before that text is deleted.
 ## 9 · Related
 
 - [[clinic-coding v2 S1 prompt simplification - deterministic logic removal]] — stage-1 experiment spec
+- [[clinic-coding v2 S2 prompt decomposition]] — stage-2 spec: one prompt per code (COPA · DATA · RISK · TIME)
 - [[clinical-coding-v1]] · [[clinical-coding-v2]]
 - [[qhe-2896-payer-field]] *(Claude memory)* — prolonged-service add-on; see the gold-writeback gap in §7
 - [[clinic-coding-note-extract-prod-gap]] *(Claude memory)* — upstream silver note-extract gap; bounds any accuracy
