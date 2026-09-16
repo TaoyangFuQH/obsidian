@@ -168,3 +168,20 @@ is not runnable as designed. A failure of that kind says nothing about the drop 
 ## Status / log
 
 - **2026-09-15** — plan written. Step 0 not yet run (VPN was off). Nothing fed.
+- **2026-09-15/16** — prolonged-service set (`900000004` / `900000009` / `900000010` from
+  `synthetic_prolonged_code`, QHE-2896) run **2× per path** on top of the original 1× round.
+  Dropped 00:13:49Z (old) / 00:13:50Z (new), 1 second apart; worker image
+  `35007306428-5423-1` unchanged before and after. All 12 completed in 4m40s.
+  **18/18 runs byte-identical on all 8 coding fields** — em+add-on, mod25, copa, data, risk,
+  mdm, time_level. Zero within-path variance, unlike `973014662` / `930199469`.
+- **2026-09-16 — the one real path difference: `llm_raw`.** Across every run fed on 09-15/16
+  (98 total): **old path 49/49 have `llm_raw`, new path 0/49**. Perfect separation.
+  Cause: there is exactly one `composer_metadata` row for clinic coding
+  (`e42e12da-…`, `workflow_folder=clinical_coding`) and **no row for `rcm-clinical-coding`** —
+  the new path resolves via execute-workflow/App-Registry by `workflow_code`, so it never
+  reads `dag_template_mappings` and never runs template `575171e3-…` (v6.0, 12 nodes).
+  Both still report the same `workflow_id 3f52b99d-…` and `workflow_version v1.0`, which is
+  why the earlier coding-field-only comparison missed it.
+  Note the v6.0 terminal node `transform-clinical-coding-v1` has **7** `arg_keys` (no
+  `verifier_raw`), so the old path's `llm_raw` is extract records only — the #5907 DAG reseed
+  is not applied on clinical.
