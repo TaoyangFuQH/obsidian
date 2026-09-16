@@ -185,3 +185,22 @@ is not runnable as designed. A failure of that kind says nothing about the drop 
   Note the v6.0 terminal node `transform-clinical-coding-v1` has **7** `arg_keys` (no
   `verifier_raw`), so the old path's `llm_raw` is extract records only — the #5907 DAG reseed
   is not applied on clinical.
+- **2026-09-16** — the remaining **8** of the multi-axis 10 (`set10b` minus `973014662` /
+  `930199469`, which already had 6× per path) run **2× per path**, on top of the baseline
+  round = **3 runs per path per encounter, 48 runs**. Dropped 01:17:05Z (old) / 01:17:07Z
+  (new); worker image `35007306428-5423-1` unchanged. All 32 completed in 9m32s.
+  **No coding field differs between paths.** em, preventive/AWV, mod25, copa, data, risk,
+  mdm all agree; 6 of the 8 are em+preventive+mod25 combinations, so this covers the axes
+  the prolonged set did not.
+  **3 encounters flake, each in exactly 1 of 6 runs, split 2 old / 1 new** — the signature
+  of sampling noise, not a path effect:
+  - `972245125` — old `o8r1` → `99213`, no `time_level`; other 5 runs → `99215` + `level 5`.
+    Same mechanism as `973014662`: the em flip is driven entirely by whether time fires.
+    **This is the only flake with a billed-code consequence, and it is on the OLD path.**
+  - `831230666` — new `n8r2` → no `time_level`; other 5 → `level 2`. em unchanged (level 2
+    does not supersede).
+  - `842563736` — old `o8r1` → `data=low`; other 5 → `straightforward`. em unchanged.
+  **`llm_raw`: 8/8 encounters DIFF — old yes, new no**, consistent with the 49/49 vs 0/49
+  result. Now **65/65 old vs 0/65 new** across everything fed on 09-15/16.
+  **Shared accuracy miss, not a path difference:** `942052792` GT `99383` (new patient,
+  age 5–11); both paths return `99393` (established patient) on all 6 runs.
