@@ -152,20 +152,48 @@ the `≥ 70 mg/dL` in the same parenthetical).
 The clause deletion is a **substantive narrowing, not a wording tweak** — call it out
 explicitly for Harvineet/Jim rather than letting it ride as part of a "rewording" ticket.
 
-### Scope check — this pattern is rare
+### Scope check — verified across all 236 deployed guidelines
 
-Scanned all 236 v6 guidelines for "exclusion-style parent heading + numbered children that
-lack their own exclusion wording". Only two conditions match:
+Rigorous scan of v6, 2026-09-17. Framing the question as "which conditions use exclusion
+language" gives an unstable count — **44** conditions mention it inside a numbered criterion,
+but most use it as a *qualifier* (`Hgb drop ≥ 2 g/dL without alternative etiology`,
+`troponin elevation … (excluding clear alternative)`), which is self-contained by construction
+and cannot be misread. The count depends entirely on where you draw the line, and it does not
+change the action.
 
-- `FAINTING EPISODE REQUIRING HOSPITALIZATION` — I.B.1/.2/.3 ← this ticket
-- `HYPERTENSIVE URGENCY` — I.B.1–.6 are workup steps (ECG, BMP, UA…), which read naturally
-  as "tests completed". Low misread risk; **recommend no change**
+The question that does matter: **which exclusion-framed criteria split into numbered children
+that display individually?** Three do — not one.
 
-Good pattern to copy, already in the corpus — `SYNCOPE WITH ABNORMAL ECG` I.C. states the
-exclusion inline in a single self-contained criterion:
-`Non-syncopal mimics reasonably excluded (e.g., seizure with postictal state > 5 minutes, hypoglycemia with glucose < 60 mg/dL as sole cause, intoxication, TIA with focal deficit).`
+| condition | criterion | children | verdict |
+|---|---|---|---|
+| `FAINTING EPISODE REQUIRING HOSPITALIZATION` | `I.B.` Alternative diagnoses reasonably excluded… | `Seizure`, `Hypoglycemia`, `Intoxication or pharmacologic sedation as sole cause` | ❌ **broken** — bare diagnosis nouns |
+| `HYPERTENSIVE URGENCY` | `I.B.` Initial evaluation completed to rule out hypertensive emergency… | `Targeted history and physical`, `12-lead ECG`, `BMP with serum creatinine`, `Urinalysis`, `Chest imaging`, `Troponin` | ✅ safe — workup steps; "ECG — met" correctly means the test was done |
+| `CHEST PAIN WITH NEGATIVE TROPONIN BUT RISK FACTORS` | `V.A.` Clinical suspicion requiring inpatient workup for life-threatening alternative diagnosis: | `Suspected aortic dissection`, `Suspected pulmonary embolism…`, `Suspected myocarditis or pericarditis…` | ✅ safe — every child is prefixed `Suspected`, and here a positive reading *is* the intent |
 
----
+So only Fainting Episode needs editing — but **not** because it is the only one that splits.
+
+### The authoring rule this implies
+
+The defect is not "an exclusion criterion was split into numbered children". Splitting is fine;
+the frontend renders criteria individually by design. The defect is:
+
+> **A numbered criterion whose text does not carry its own polarity.**
+
+- `Seizure` — bare noun, no polarity → breaks
+- `12-lead electrocardiogram (ECG)` — a test name needs no polarity → fine
+- `Suspected aortic dissection` — polarity stated → fine
+- `Seizure ruled out` — polarity stated → fixed
+
+Every numbered criterion must state its own polarity: `ruled out`, `Suspected`, `documented`,
+`absent`, or simply be the name of a test performed. **Never a bare diagnosis noun.** That is
+the guardrail to put in guideline-authoring guidance — it generalises, whereas "don't split"
+would forbid two patterns that are already correct.
+
+Worth noting the corpus already contains the *inline* alternative, which is equally safe and
+needs no child criteria at all — `SYNCOPE WITH ABNORMAL ECG` I.C.:
+`Non-syncopal mimics reasonably excluded (e.g., seizure with postictal state > 5 minutes,
+hypoglycemia with glucose < 60 mg/dL as sole cause, intoxication, TIA with focal deficit).`
+That is the same clinical content as Fainting Episode's I.B. block, authored correctly.
 
 ## 4. How to make the change — recommended mechanism
 
