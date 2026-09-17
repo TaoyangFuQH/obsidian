@@ -189,7 +189,7 @@ Two gotchas that cost time:
 
 ---
 
-## 3. The change — v7 rewording
+## 3. The change — the three I.B. criteria
 
 Target row: condition `FAINTING EPISODE REQUIRING HOSPITALIZATION`, version 6
 (prod utmb id `ca9a7bce-f94f-4ec5-8539-d8232dfcb87a`, `updated_at 2026-07-01`; ids differ
@@ -204,7 +204,7 @@ per cluster — look it up, don't hardcode).
   - **I.B.3.** Intoxication or pharmacologic sedation as sole cause.
 ```
 
-### Proposed v7 (recommended)
+### The amended text
 
 ```markdown
 - **I.B.** Alternative diagnoses reasonably excluded by initial evaluation, including:
@@ -214,7 +214,7 @@ per cluster — look it up, don't hardcode).
 ```
 
 Diff: **+ "ruled out" ×3**, **− "or correlated with symptoms"** on I.B.2. Nothing else in
-the corpus changes.
+the corpus changes. Applied in place to v6 — see §4.
 
 ### Deviations from the ticket
 
@@ -328,472 +328,253 @@ needs no child criteria at all — `SYNCOPE WITH ABNORMAL ECG` I.C.:
 hypoglycemia with glucose < 60 mg/dL as sole cause, intoxication, TIA with focal deficit).`
 That is the same clinical content as Fainting Episode's I.B. block, authored correctly.
 
-## 4. How to make the change — recommended mechanism
+## 4. How to make the change — in place on v6
 
-**Copy the full v6 corpus to v7 with three edited lines, then bump `conditions_version`.**
+> [!info] Plan changed 2026-09-17
+> This started as "copy the corpus to v7 and cut `conditions_version` over". It is now a **single
+> in-place `UPDATE` of one row**. The v7 route is kept in §6 for the reasoning and because the
+> guards built for it produced the two fingerprints this approach now asserts.
 
 | option | verdict |
 |---|---|
-| **A** — `UPDATE` the v6 row in place | ❌ Every completed run records `guidelines_version: 6` in `_provenance`. Editing v6 makes that provenance a lie and past runs unreproducible. No rollback artifact. |
-| **B** — import full corpus as v7, bump `conditions_version` 6→7 | ✅ **Recommended.** Clean provenance axis, rollback is one config flip, old runs stay interpretable. |
-| **C** — import v7 containing only the edited row | ❌ **Dangerous.** `get_guidelines` fetches by `(conditions, version)` and **degrades silently to `{}`** on a miss — the run still classifies on LOS + IoS alone. Every other condition would lose its guidelines with no error. |
+| **A** — `UPDATE` the v6 row in place | ✅ **chosen.** One column of one row. No cutover, no new rows, no config change anywhere — reading v6 is what every affected workflow already does. |
+| **B** — full corpus copy to v7 + bump `conditions_version` | ❌ disproportionate to a three-word wording fix, and carries three hazards (below) |
+| **C** — v7 containing only the edited row | ❌ **dangerous.** `get_guidelines` fetches by `(conditions, version)` and degrades **silently to `{}`** on a miss — the run still classifies on LOS + IoS. Would strip guidelines from 235 conditions invisibly. |
 
-### Runbook (per cluster)
+### What in place avoids
 
-1. **Pre-check** — assert no v7 exists yet and v6 is exactly 236 rows:
-   `SELECT version, count(*) FROM workflows.guidelines WHERE is_deleted=false GROUP BY version;`
-2. **Export** v6 → CSV with the upload schema's columns
-   (`condition, guideline, description, version, is_in_patient, workflow_code`), setting
-   `version = 7` and `workflow_code = 'utilization-review'`.
-3. **Edit** only the `FAINTING EPISODE REQUIRING HOSPITALIZATION` row's three I.B lines.
-   Diff the CSV against the export and confirm exactly 3 changed lines in 1 row.
-4. **Upload** — GCS + the `guidelines-import` Temporal workflow (`org_id`, `gcs_uri`), or
-   POST the CSV to `/api/v2/workflows/guidelines/upload`.
-5. **Post-check** — v7 count is **exactly 236** (not 472), and the three lines read as intended.
-6. **Bump** `composer_metadata.temporal_config.conditions_version` 6 → 7 for
-   `workflow_code = 'utilization-review'`.
-7. **Rerun + backtest** (§5).
+All three were found while building the v7 route, which is why they are worth recording:
 
-**Rollback:** set `conditions_version` back to 6. The v7 rows can stay; they are inert once
-nothing points at them.
+- **`utilization-review-guidelines`** is pinned at 6 on `staging-qhai` and shares the corpus — an
+  older `composer_metadata` row for the *same* product surface (identical `workflow_display`
+  "Utilization Review" and `workflow_url` `/utilization-report`, created 2025-04-23 vs 2025-10-08,
+  rank 1 vs 5). A cutover touching only `utilization-review` left it behind on the old corpus.
+- Any workflow with **`conditions_version = NULL`** resolves dynamically
+  (`get_conditions_version()` → `GET /guidelines?page=1&limit=1` ordered `created_at DESC`) and
+  would have auto-followed the new version untested the moment its rows landed —
+  `utilization-review-ios` on prod-utmb/prod-qhai, `utilization-review-guidelines` on
+  prod-uthscsa/prod-emory.
+- **Version numbering is not contiguous** across clusters (prod-utmb has 0–4 and 6; clinical-qhai
+  has 1, 5, 6), so no single next number was free everywhere.
 
-### Landmines
+None of these exist when the text every workflow already reads is the text that changes.
 
-- **The bulk upload is INSERT-only, not upsert.** `repositories/v2/workflows/guidelines.py::upload`
-  constructs a fresh `TableModel` per row. Running it twice gives you 472 v7 rows — exactly
-  how `prod-emory` ended up with v2:476. Any row error rolls the whole upload back, so a
-  partial state is not a risk, but a *repeated* one is.
-- **`utilization-review-ios` resolves its version dynamically.** It has
-  `conditions_version: None`, and `get_conditions_version()` is
-  `GET /guidelines?page=1&limit=1` ordered `created_at DESC` — it returns whatever row was
-  inserted most recently. **It will jump to v7 the instant v7 rows land, before step 6 and
-  without any config change.** Confirm per tenant whether that workflow is live and whether
-  it should follow. Same exposure for `prod-emory` / `prod-qhai`, whose `utilization-review`
-  is also on `None`.
-- **Version numbering is not contiguous** — prod utmb has 0,1,2,3,4,6 (no 5); clinical qhai
-  has 1,5,6; dev qhai is on 5. Don't assume `max(version) + 1` is free everywhere; check per cluster.
+### What it costs
 
----
+`ur/transform.py` records `_provenance.guidelines_version`, so **runs from before and after the
+edit both report 6**. Provenance cannot separate them, and past runs are not reproducible from the
+corpus. Discriminators, in descending reliability:
+
+1. the two md5s — **asserted by the script on both sides**, not merely documented
+2. the row's `updated_at`
+3. the per-cluster applied date — which, after the changelog trim, has no home in the repo. Track
+   it somewhere or it is only recoverable from `updated_at`.
+
+**Consequence for the backtest:** with v7 the comparison was v6 against v7. In place there is no
+second version afterwards, so the syncope cohort's baseline **must be exported before the script
+runs**. That makes baseline export a new step-2 precondition, not a step-4 activity.
+
+### The script
+
+`packages/rcm/ur/scripts/v6_ib_ruled_out_inplace.sql` — one file, no cutover, no second script.
+
+```
+\set ON_ERROR_STOP on
+SET client_encoding = 'UTF8'     -- U+2265 lives in the matched literals
+BEGIN
+  guard    3 accepted states only: reviewed original (apply) / reviewed result
+           (no-op) / anything else (abort, naming all three hashes)
+  UPDATE   keyed on md5 = 26dde41e... -> 1 row first run, 0 rows thereafter
+  assert   md5 = 8c73daf3..., three "ruled out" present, clause absent
+COMMIT
+```
+
+**Genuinely idempotent**, which the v7 install script could not be — it had to refuse a second run
+outright or risk 472 rows. Here a re-run is simply a no-op that still passes its assertions.
+
+| | md5 of the syncope guideline |
+|---|---|
+| before | `26dde41e09a40c637256d34e0c3674f0` |
+| after | `8c73daf316210e278a1f1a67e48454ab` |
+
+Measured on `clinical-qhai` during the v7 dry run; exact on all five clusters because the v6 source
+is byte-identical across them.
+
+Rollback: the reverse `UPDATE`, keyed on the post-change md5 so it likewise cannot fire twice.
+Full text in the script header.
 
 ## 5. Rollout plan — clinical → staging → production
 
-The env ladder has to follow the **qhai** tenant, because utmb has no clinical or staging
-UR deployment. qhai clinical and staging are both already on v6, so they are faithful
-rehearsals of the exact same corpus.
+The ladder follows the **qhai** tenant for the lower rungs: `qh-clinical-customer-utmb` has no UR
+workflow and only the unused v2 corpus, and there is **no staging utmb cluster at all**. Clinical
+and staging qhai both read the same v6, so they are faithful rehearsals.
 
-### Stage 0 — decide scope (blocking, needs Harvineet/Jim/Kevina)
+### Stage 0 — decide scope (blocking, owner decision)
 
-- Is this **utmb-only** or **all v6 tenants**? Landing v7 only for utmb makes utmb diverge
-  from mercy-stlouis and uthscsa, which run the identical v6 corpus and have the identical
-  defect. A tenant-specific fix to a shared clinical corpus needs an explicit owner decision.
-- Confirm the **I.B.3 addition**.
-- Confirm the **`or correlated with symptoms` deletion** on I.B.2 — it is a semantic change,
-  not a rewording, and it is what actually fixes the ticket's issue 1.
-- Optional: `qh-dev-customer-qhai` (on v5) as a zero-risk mechanics dry-run first.
+v6 is read by three production tenants — utmb, mercy-stlouis, uthscsa — all carrying the identical
+defect. QHE-4200 is labelled `client:utmb` only. Amending one copy makes them diverge.
 
-### Stage 1 — clinical · `qh-clinical-customer-qhai`
+### Stage 1 — export the backtest baseline ← NEW, and it must come first
 
-Full runbook §4. Goal is to prove the **mechanism**, not the metrics: v7 lands at exactly
-236 rows, `conditions_version` flips, a UR run picks up v7, and the three criteria render in
-the UI as "… ruled out". Verify the `I.B.1` line in the Severity-of-Illness → Met Criteria tab.
+In-place editing leaves no second version to compare against. Export the syncope cohort's current
+results (per-encounter `I.B.1/.2/.3 criterion_met`, `overall_criteria_met`,
+`overall_ai_classification`, `in_patient_confidence`) from staging **before** any cluster is
+amended. Miss this and the change is unmeasurable after the fact — the only fallback is filtering
+runs by timestamp against the row's `updated_at`.
 
-### Stage 2 — staging · `qh-staging-customer-qhai`
+### Stage 2 — clinical · `qh-clinical-customer-qhai`
 
-Same runbook. This is where the **backtest** runs, since staging has the encounter volume
-clinical lacks:
-- Pull the syncope-cohort encounters (primary/secondary condition = `FAINTING EPISODE REQUIRING HOSPITALIZATION`) already scored under v6.
-- Re-run under v7 and diff per encounter: `I.B.1/.2/.3` `criterion_met`, `overall_criteria_met`,
-  and `overall_ai_classification` + `in_patient_confidence`.
-- Report population-level movement **and** the per-cause changelog. Two artifacts, per
-  `docs/EVALUATION.md` in coding-ai-harness.
-- Expected direction: removing `or correlated with symptoms` should make `I.B.2` *harder* to
-  mark met on charts where hypoglycemia was symptomatic — so some encounters should lose a
-  met criterion. If nothing moves, the LLM was ignoring the contradictory clause and the fix
-  is display-only; that is itself a finding worth writing down.
-- Gate: no unexplained classification flips outside the syncope cohort (there should be
-  **zero** — nothing else in the corpus changed).
+Dry run, then apply. Goal is mechanism, not metrics: the guard passes against the real text, md5
+lands on `8c73daf3…`, and the UI's Severity of Illness → Met Criteria tab reads
+`I.B.1. … Seizure ruled out …`.
 
-### Stage 3 — production
+### Stage 3 — staging · `qh-staging-customer-qhai` — the measurement gate
 
-Order: **`qh-prod-customer-utmb`** first (the ticket's client, and the reporter is watching
-it), then mercy-stlouis and uthscsa if Stage 0 scoped them in.
+Apply, then re-run the syncope cohort and diff against the Stage 1 baseline.
 
-- Land during a low-volume window; UR runs continuously off Databricks.
-- Post-deploy: re-run the specific HAR from the Slack thread and confirm the UI now reads
-  "Seizure ruled out" / "Hypoglycemia ruled out".
-- Watch the syncope cohort's classification mix for 48h against the staging prediction.
-- Rollback trigger: classification movement materially outside what staging predicted →
-  flip `conditions_version` back to 6.
+- **Zero** movement outside the syncope cohort — nothing else in the corpus changed, so any
+  movement there means the `UPDATE` hit more than it should have (it cannot, being pinned to one
+  condition + one md5, but verify rather than assume).
+- Expected direction: dropping `or correlated with symptoms` should make `I.B.2` harder to mark met
+  where hypoglycemia was symptomatic, so some encounters lose a met criterion. **If nothing moves,
+  the model was ignoring the contradictory clause and the change is display-only** — itself a
+  finding worth writing down.
+- Two artifacts: eval report + changelog, per `docs/EVALUATION.md`.
+- Note `utilization-review-guidelines` is also pinned at 6 here, so it picks the change up too —
+  with the v7 route it would have been left behind.
 
-### Open questions
+### Stage 4 — production
 
-- [ ] utmb-only, or all three v6 prod tenants?
-- [ ] I.B.3 in scope? I.B.2 clause deletion confirmed?
-- [ ] Ticket text verbatim, or house-style version from §3?
-- [ ] Is `utilization-review-ios` live anywhere on v6? It auto-jumps to v7.
-- [ ] Who owns the guideline CSV of record? `gs://utmb-clinical-composer-ur-datafiles/` is
-      empty, so the v6 corpus has no visible source artifact — v7 should establish one.
-- [ ] Does UTMB need to sign off on a clinical-criteria wording change?
-
----
+`qh-prod-customer-utmb` first, low-volume window; then mercy-stlouis and uthscsa if Stage 0 scoped
+them in. Re-run the HAR from the Slack thread and confirm the UI wording. Watch the syncope cohort
+48h against the Stage 3 prediction. Rollback trigger: material divergence → reverse `UPDATE`.
 
 ## 6. Execution plan
 
-### 6.1 Mechanism: SQL script, not the CSV import path
-
-Two candidate mechanisms exist. **SQL wins for this change**, and it is worth writing down why,
-because the CSV path is the one the platform nominally provides.
-
-| | `guidelines-import` (GCS CSV → bulk-upload API) | **SQL script** |
-|---|---|---|
-| fit | bulk authoring a whole corpus from a spreadsheet | ✅ surgical edit to 3 lines inside one row |
-| risk | round-trips 236 markdown blobs (embedded newlines, `**`, `≥`, quotes) through CSV — corruption risk for no gain | ✅ text never leaves the DB; `INSERT … SELECT` copies it |
-| atomicity | insert-only, no upsert, no assertions | ✅ one transaction, pre- and post-assertions |
-| reviewability | a CSV diff is unreadable | ✅ readable git diff |
-| repeatability across 5 clusters | re-upload per cluster, hope the CSV is identical | ✅ same file, `psql -f`, per cluster |
-
-The enabling fact: the v6 syncope text is **byte-identical on all five UR clusters**
-(`md5 = 26dde41e09a40c637256d34e0c3674f0`), so one script is provably safe everywhere.
-
-There is **no cross-tenant batch** — each customer cluster is its own Cloud SQL instance.
-"Batch" here means one reviewed script executed N times, not one statement spanning tenants.
-
-### 6.2 Files to add (qh-platform, branch `QHE-4200-ur-soi-ib-ruled-out`)
+### 6.1 Files (qh-platform, branch `QHE-4200-ur-soi-ib-ruled-out`, PR #6310)
 
 ```
-packages/rcm/ur/scripts/v6_to_v7_guidelines.sql       # step 1 — install v7
-packages/rcm/ur/scripts/bump_conditions_version_v6_to_v7.sql   # step 2 — cut over
-packages/rcm/ur/CHANGELOG.md                                  # guideline corpus version history (terse: date/ticket/PR/diff/targets/promotion log)
+packages/rcm/ur/scripts/v6_ib_ruled_out_inplace.sql   # the whole change
+packages/rcm/ur/CHANGELOG.md                          # corpus history entry
 ```
 
-Conventions to follow — precedent is `packages/rcm/clinical_coding/dag/migrate_v0_to_v1.sql`:
-`\set ON_ERROR_STOP on`, `BEGIN` / `COMMIT`, `DO $$ … RAISE EXCEPTION` guards, and a header
-comment carrying usage + rollback. `packages/rcm/ur/scripts/` does not exist yet; the
-clinical-coding precedent puts SQL under the package's `dag/`, which is the wrong noun here,
-so a new `scripts/` dir is the better home.
+The v7 pair (`v6_to_v7_guidelines.sql`, `bump_conditions_version_v6_to_v7.sql`) was deleted in
+commit `f81a646`. Convention followed: `\set ON_ERROR_STOP on`, `BEGIN`/`COMMIT`,
+`DO $$ … RAISE EXCEPTION` guards, header carrying usage + rollback — precedent is
+`packages/rcm/clinical_coding/dag/migrate_v0_to_v1.sql`.
 
-Changelog at `packages/rcm/ur/CHANGELOG.md`. Other packages use that filename for Python code
-history; here it tracks the **guideline corpus**, which is a database artifact. The file says so
-in its header. If this package ever needs a code changelog too, split them at that point.
+### 6.2 Verified runbook — how to execute against a cluster
 
-### 6.3 Script 1 — install v7
+Every command exercised read-only against `qh-clinical-customer-qhai` on 2026-09-17.
 
-Copies all 236 v6 rows to v7, applying three `replace()` calls to the syncope row only.
-Carries over `access`, `status`, `description`, `is_in_patient` and `composer_metadata_id`;
-new `gen_random_uuid()` for `id`; `created_at` / `updated_at` from column defaults.
-
-Guards matter more than the INSERT here. Four pre-assertions:
-
-1. **no v7 rows exist** — the script is deliberately not idempotent; a second run would leave
-   472 rows. `prod-emory` already carries v2:476 from exactly this mistake on the CSV path.
-2. **v6 is exactly 236 rows** — else this cluster is not on the reviewed corpus.
-3. **exactly one v6 syncope row.**
-4. **`md5(guideline) = 26dde41e09a40c637256d34e0c3674f0`** — the single most important check.
-   The rewrite is substring replacement, so whitespace drift would make it a **silent no-op**
-   and ship a v7 identical to v6. Asserting the md5 turns that into an abort.
-
-Four post-assertions: v7 has 236 rows; the three `ruled out` strings are present;
-`or correlated with symptoms` is gone; and **exactly one** guideline differs between v6 and v7.
-
-Rollback: **soft delete**, matching the schema's convention and reversible —
-`UPDATE workflows.guidelines SET is_deleted = true, deleted_at = timezone('UTC', now()) WHERE
-version = 7 AND is_deleted = false;`. Safe only while `conditions_version` still points at 6.
-Every read path filters `is_deleted`, and step 0 counts live rows only, so this both hides v7 and
-re-permits a clean re-run. Hard `DELETE` also works (the role has the privilege) but is
-irreversible — deliberate cleanup only.
-
-### 6.4 Script 2 — cut over
-
-`jsonb_set(temporal_config, '{conditions_version}', '7')` on the `utilization-review`
-`composer_metadata` row (`temporal_config` is `jsonb`, so this is clean). Guards: v7 is
-complete at 236 rows; exactly one `utilization-review` row; current version is **exactly 6**
-— never cut over from an unknown state; and an explicit abort if `conditions_version` is
-`NULL`, since such a cluster resolves dynamically and has already moved on its own.
-
-Rollback: same `jsonb_set` back to `6`. In-flight workflows past `ur-get-guidelines` keep the
-version they started with, so no drain is needed.
-
-> [!danger] Script 1 is not as inert as it looks
-> Any workflow with `conditions_version: NULL` resolves via
-> `get_conditions_version()` → `GET /guidelines?page=1&limit=1` ordered `created_at DESC`, so
-> it **jumps to v7 the moment script 1 commits** — before the cutover, with no config change.
-> As of 2026-09-17 that is `utilization-review-ios` wherever deployed, plus
-> `utilization-review` on `prod-emory` and `prod-qhai`. Run this on every cluster first:
-> ```sql
-> SELECT workflow_code, temporal_config->'conditions_version'
->   FROM workflows.composer_metadata WHERE is_deleted = false;
-> ```
-
-### 6.5 The ladder — update → test, six gates
-
-Same two scripts every rung. A rung is not done until its test passes; a failed test rolls
-back that rung only (`conditions_version` → 6) and stops the promotion.
-
-| # | rung | action | test / gate |
-|---|---|---|---|
-| 1 | **update clinical** `qh-clinical-customer-qhai` | script 1 → verify → script 2 | v7 = 236 rows, 1 changed guideline, `conditions_version` = 7 |
-| 2 | **test clinical** | run one syncope encounter through UR | UI Severity-of-Illness → Met Criteria shows `I.B.1. … Seizure ruled out …`; `_provenance.guidelines_version` = 7. **Mechanism only — not a metrics gate** (clinical lacks volume) |
-| 3 | **update staging** `qh-staging-customer-qhai` | same two scripts | same structural checks |
-| 4 | **test staging — the real gate** | re-run the syncope cohort under v7, diff against v6 | per-encounter diff of `I.B.1/.2/.3 criterion_met`, `overall_criteria_met`, `overall_ai_classification`, `in_patient_confidence`. **Zero** movement outside the syncope cohort (nothing else changed — any movement there means the copy was not clean). Two artifacts: eval report + changelog, per `docs/EVALUATION.md` |
-| 5 | **update production** `qh-prod-customer-utmb` | same two scripts, low-volume window | structural checks; then re-run the HAR from the Slack thread |
-| 6 | **test production** | watch the syncope cohort 48h | classification mix tracks the stage-4 prediction. Rollback trigger: material divergence → `conditions_version` → 6 |
-
-Then stages 4–5 of the promotion log (mercy-stlouis, uthscsa) **only if §5 Stage 0 scoped them in**.
-
-### 6.6 Still blocking — do not start rung 1 until these are answered
-
-- [ ] **Scope**: utmb only, or all three v6 prod tenants? Landing v7 on utmb alone makes the
-      three diverge on a shared clinical corpus. Owner decision, not ours.
-- [ ] **I.B.3 addition** confirmed by Harvineet/Jim?
-- [ ] **`or correlated with symptoms` deletion** confirmed as intended? It is a semantic
-      change, and it is what actually fixes issue 1.
-- [ ] Is `utilization-review-ios` live on any v6 cluster? It auto-follows v7.
-- [ ] Does UTMB need to sign off on a clinical-criteria wording change?
-- [ ] Is `7` free on every target cluster? Numbering is not contiguous (prod-utmb has 0-4 and 6;
-      clinical-qhai has 1, 5, 6), so `max + 1` is not a safe assumption.
-
-### 6.7 Verified runbook — how to actually execute against a cluster
-
-Every command below was exercised read-only against `qh-clinical-customer-qhai` on 2026-09-17.
-
-**The scripts must run in local `psql`, not in a pod.** `mvp-proxy` has Python but **no psql**
-(`command -v psql` → nothing), and the scripts use the psql meta-command
-`\set ON_ERROR_STOP on`, which psycopg2 cannot execute. So: port-forward the Cloud SQL proxy and
-drive it from the laptop. Local psql is 15.18, server is 15.17 — same major, no client/server
-mismatch.
+**The script must run in local `psql`, not in a pod.** `mvp-proxy` has Python but **no psql**, and
+the script uses the meta-command `\set ON_ERROR_STOP on`, which psycopg2 cannot execute. Local
+psql is 15.18, server 15.17 — same major.
 
 ```bash
-# 0. target the cluster.  --internal-ip is MANDATORY: without it kubeconfig gets the
+# 0. target the cluster. --internal-ip is MANDATORY: without it kubeconfig gets the
 #    public master IP and every kubectl call hangs (authorized networks = Tailscale only).
 gcloud container clusters get-credentials qh-clinical-customer-qhai \
   --region us-central1 --project qh-clinical --internal-ip
 
-# 1. PRE-FLIGHT: which workflows resolve their version dynamically?  Any row showing
-#    null here will jump to v7 the instant script 1 commits -- before the cutover.
-kubectl -n qh exec -i \
-  "$(kubectl -n qh get pods --field-selector=status.phase=Running -o name \
-       | grep -m1 mvp-proxy | cut -d/ -f2)" -c mvp-proxy -- \
-  python3 -c 'import os,psycopg2;c=psycopg2.connect(host=os.environ["DB_HOST"],port=os.environ["DB_PORT"],user=os.environ["POSTGRES_USER"],password=os.environ["POSTGRES_PASSWORD"],dbname=os.environ["POSTGRES_DB"]);c.set_session(readonly=True);u=c.cursor();u.execute("SELECT workflow_code, temporal_config->>%s FROM workflows.composer_metadata WHERE is_deleted=false ORDER BY 1",("conditions_version",));[print(r) for r in u.fetchall()]'
-
-# 2. credentials -- read from the k8s secret, never hardcode.  NOTE the DB user is
-#    per-tenant: 'qhai-com-postgres' on clinical-qhai, 'utmb-postgres' on prod-utmb.
-export PGPASSWORD=$(kubectl -n qh get secret mvp-db -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)
+# 1. credentials from the k8s secret. The DB user is PER-TENANT --
+#    qhai-com-postgres here, utmb-postgres on prod-utmb. Never hardcode.
 PGUSER=$(kubectl -n qh get secret mvp-db -o jsonpath='{.data.POSTGRES_USER}' | base64 -d)
+export PGPASSWORD=$(kubectl -n qh get secret mvp-db -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)
 
-# 3. port-forward the Cloud SQL proxy (leave running in its own shell)
+# 2. port-forward the Cloud SQL proxy (own shell, leave running)
 kubectl -n qh port-forward svc/mvp-cloudsqlproxy 5433:5432
 
-# 4. DRY RUN -- exercises every guard and the INSERT, then throws it away.
-#    Do this on every cluster before the real run; it is free and catches a drifted
-#    corpus or an already-present v7 without touching anything.
-sed 's/^COMMIT;/ROLLBACK;/' packages/rcm/ur/scripts/v6_to_v7_guidelines.sql \
+# 3. DRY RUN -- exercises the guard, the UPDATE and every assertion, then discards.
+#    Free, and it is where a drifted corpus surfaces. Do this on every cluster first.
+sed 's/^COMMIT;/ROLLBACK;/' packages/rcm/ur/scripts/v6_ib_ruled_out_inplace.sql \
   | psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db
 
-# 5. for real
+# 4. for real
 psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db \
-  -f packages/rcm/ur/scripts/v6_to_v7_guidelines.sql
-
-# 6. VERIFY before cutting over -- v7 = 236 rows, one changed guideline, three
-#    criteria reworded.  The script asserts all of this itself and aborts on failure,
-#    so reaching this point clean is the verification; the tail SELECTs print the I.B. block.
-
-# 7. the cutover
-psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db \
-  -f packages/rcm/ur/scripts/bump_conditions_version_v6_to_v7.sql
+  -f packages/rcm/ur/scripts/v6_ib_ruled_out_inplace.sql
 
 unset PGPASSWORD
 ```
 
-Rollback, either stage:
+A dry run prints `UPDATE 1` and the success `NOTICE`, then `ROLLBACK` — and the two tail SELECTs run
+*outside* the rolled-back transaction, so they show the **unamended** text. Expected, not a failure.
 
-```bash
-# undo the cutover (instant, no data loss)
-psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db -c \
-  "UPDATE workflows.composer_metadata
-      SET temporal_config = jsonb_set(temporal_config,'{conditions_version}','6'::jsonb),
-          updated_at = timezone('UTC', now())
-    WHERE workflow_code='utilization-review' AND is_deleted=false;"
+Rollback after a real run: the reverse `UPDATE` from the script header, keyed on the post-change
+md5. Confirm `md5(guideline)` returns to `26dde41e09a40c637256d34e0c3674f0`.
 
-# then, if you also want the corpus retired (soft delete -- reversible)
-psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db -c \
-  "UPDATE workflows.guidelines
-      SET is_deleted = true, deleted_at = timezone('UTC', now())
-    WHERE version = 7 AND is_deleted = false;"
-```
+### 6.3 Merging the PR does not deploy this
 
-### 6.8 Merging the PR does not deploy this
+The `.sql` is **not** an Alembic migration — nothing runs it automatically. Neither CI gate touches
+it (confirmed 2026-09-17): `migration-check.yml` watches only
+`services/{api,qh-proxy,qh-apps-proxy}/migrations/versions/**`, and `check_phi_added_lines.py` scans
+added **Python** lines only. Commit convention `QHE-4200: …`, base `develop`, no PR template. The
+PR description leads with this.
 
-The two `.sql` files are **not** Alembic migrations — nothing runs them automatically. The PR
-makes them reviewed, versioned artifacts; applying them is the manual, per-cluster procedure in
-6.7. Say so in the PR description so no reviewer assumes merge = applied.
+### 6.4 Still blocking — before the production rung
 
-Neither CI gate touches these files, confirmed 2026-09-17:
-`.github/workflows/migration-check.yml` only watches
-`services/{api,qh-proxy,qh-apps-proxy}/migrations/versions/**`, and
-`scripts/check_phi_added_lines.py` scans **added Python lines only**. Commit convention from
-recent history is `QHE-4200: <description>`, base branch `develop`; there is no PR template.
+- [ ] **Scope**: utmb only, or all three prod tenants reading v6 (utmb, mercy-stlouis, uthscsa)?
+      Amending only utmb's copy makes them diverge on a shared clinical corpus. Owner decision.
+- [ ] Does UTMB need to sign off on a clinical-criteria wording change?
+- [ ] Where do the per-cluster applied dates live, now that the changelog no longer carries a
+      promotion log? Provenance reports 6 on both sides, so that date is a real discriminator.
 
 ## 7. Next steps — ordered checklist
 
-**Step 1 done. Step 2 pre-flight + dry run done (2a/2b); the live apply (2c) has not run.**
-PR (PR [#6310](https://github.com/Qualified-Health/qh-platform/pull/6310)). Next up: step 2, update clinical.
+**Step 1 done** (PR [#6310](https://github.com/Qualified-Health/qh-platform/pull/6310)).
+Pre-flight and a dry run of the *v7* script both passed on clinical-qhai — that is where the two
+fingerprints came from — but **the in-place script has not been run against any cluster.**
 
-Text is settled (`ruled out` x3 + the clause deletion + I.B.3), so **step 1 is unblocked now**.
-The one open decision — scope, i.e. utmb alone or all three v6 tenants — gates step 5 only, so
-it can be chased in parallel with steps 1-4.
+### Step 1 — branch, files, commit, PR · ✅ done
 
-### Step 1 — branch, files, commit, PR
+- [x] worktree + branch `QHE-4200-ur-soi-ib-ruled-out` off `develop`
+- [x] script + changelog under `packages/rcm/ur/`
+- [x] PR against `develop`, description leading with "merging does not change any environment"
+- [x] v7 approach replaced by in-place (commit `f81a646`), PR title and body updated
+- [x] changelog trimmed to ticket / PR / script / scope / diff (commits `092ba87`, `39cc851`)
 
-Branch first, off `develop`. Two naming conventions coexist in the repo (`feat/…`/`fix/…`, and
-`QHE-XXXX-…`); use the ticket-key form so Jira auto-links the branch.
+### Step 2 — export the backtest baseline · ⬅ next, and it gates everything after
 
-```bash
-git -C ~/workspace/qh-platform worktree add .worktrees/qhe-4200 \
-  -b QHE-4200-ur-soi-ib-ruled-out develop
-cd ~/workspace/qh-platform/.worktrees/qhe-4200
-mkdir -p packages/rcm/ur/scripts
-# add: scripts/v6_to_v7_guidelines.sql
-#      scripts/bump_conditions_version_v6_to_v7.sql
-#      CHANGELOG.md
-git add packages/rcm/ur/scripts packages/rcm/ur/CHANGELOG.md
-git commit -m "QHE-4200: UR SOI guideline v7 — self-contained I.B. exclusion criteria"
-git push -u origin QHE-4200-ur-soi-ib-ruled-out
-gh pr create --base develop --title "QHE-4200: UR SOI guideline v7 — self-contained I.B. exclusion criteria"
-```
+- [ ] identify the syncope cohort on staging (primary or secondary condition =
+      `FAINTING EPISODE REQUIRING HOSPITALIZATION`)
+- [ ] export per-encounter `I.B.1/.2/.3 criterion_met`, `overall_criteria_met`,
+      `overall_ai_classification`, `in_patient_confidence`
+- [ ] store it somewhere durable — **local only**, it carries encounter ids
 
-- [x] worktree + branch off `develop` — `.worktrees/qhe-4200`, branch `QHE-4200-ur-soi-ib-ruled-out`
-- [x] three files added under `packages/rcm/ur/`
-- [x] commit `fe08cdd` — `QHE-4200: UR SOI guideline v7 — self-contained I.B. exclusion criteria`
-- [x] PR against `develop` — [#6310](https://github.com/Qualified-Health/qh-platform/pull/6310)
-- [x] **PR description leads with "merging does not change any environment"** — see 6.8
-- [x] PR links QHE-4200 and tables the three reviewed decisions, plus the scope question for reviewers
+There is no second version to diff against after the edit. This is not optional.
 
-No CI gate touches these files (verified 2026-09-17): `migration-check.yml` watches only
-`services/{api,qh-proxy,qh-apps-proxy}/migrations/versions/**`, and
-`check_phi_added_lines.py` scans added **Python** lines only.
+### Step 3 — clinical · `qh-clinical-customer-qhai`
 
-### Step 2 — update clinical · `qh-clinical-customer-qhai`
+- [ ] `get-credentials … --internal-ip`
+- [ ] creds from the `mvp-db` secret (user here: `qhai-com-postgres`)
+- [ ] port-forward `svc/mvp-cloudsqlproxy 5433:5432`
+- [ ] **dry run** — `sed 's/^COMMIT;/ROLLBACK;/'` piped into psql; expect `UPDATE 1` + success
+      `NOTICE`, then `ROLLBACK`. Tail SELECTs show the *unamended* text — expected
+- [ ] apply for real; a clean exit is the verification (the script asserts the result md5)
+- [ ] confirm `md5(guideline)` = `8c73daf316210e278a1f1a67e48454ab`
+- [ ] record the date against this cluster (no promotion log in the changelog any more — see §6.4)
 
-Mechanics in **6.7**. Summary: no psql in the pod, so port-forward `svc/mvp-cloudsqlproxy`
-and drive from local psql.
-
-- [x] `get-credentials … --internal-ip`
-- [x] **pre-flight clean (2026-09-17)** — one UR workflow only, `utilization-review` cv=6, so
-      neither sibling guard fires here. v6 = 236 live rows, version 7 = 0 rows in any state,
-      target row `f0677828…` md5 **matches** `26dde41e09a40c637256d34e0c3674f0`, 7730 chars
-- [x] credentials from the `mvp-db` secret — user here is `qhai-com-postgres`
-- [x] port-forward `svc/mvp-cloudsqlproxy 5433:5432`
-- [x] **dry run passed (2026-09-17)** — `SET` → `BEGIN` → both guard `DO`s → `INSERT 0 236` →
-      `NOTICE … v7 syncope md5 = 8c73daf316210e278a1f1a67e48454ab` → post-assert `DO` → `ROLLBACK`.
-      Verified afterwards: version 7 rows **0**, `conditions_version` still **6**, v6 md5 unchanged.
-      The tail SELECTs return 0 rows — expected, they run outside the rolled-back transaction
-- [ ] run `v6_to_v7_guidelines.sql` — a clean exit *is* the verification (the script asserts
-      236 rows, one changed guideline, three reworded criteria, and aborts otherwise)
-- [ ] run `bump_conditions_version_v6_to_v7.sql`
-- [ ] fill in the promotion-log row in `packages/rcm/ur/CHANGELOG.md`
-
-### Step 2c — the live apply on clinical-qhai
-
-Two scripts, **a human gate between them**. Preconditions already verified by 2a/2b on this
-cluster: single UR workflow pinned at 6, v6 = 236 live rows, no version-7 rows, source md5 matches.
-No `-v allow_dynamic_followers` needed here — guard 0b finds nothing and returns early.
-
-**Setup** (same as the dry run; reuse the session if the port-forward is still up)
-
-```bash
-gcloud container clusters get-credentials qh-clinical-customer-qhai \
-  --region us-central1 --project qh-clinical --internal-ip
-PGUSER=$(kubectl -n qh get secret mvp-db -o jsonpath='{.data.POSTGRES_USER}' | base64 -d)
-export PGPASSWORD=$(kubectl -n qh get secret mvp-db -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)
-kubectl -n qh port-forward svc/mvp-cloudsqlproxy 5433:5432   # own shell, leave running
-```
-
-**1 — install v7.** Inert on this cluster: nothing reads v7 until step 3 runs.
-
-```bash
-psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db \
-  -f packages/rcm/ur/scripts/v6_to_v7_guidelines.sql
-```
-
-**2 — verify.** The script asserts its own invariants and aborts on any failure, so a clean exit
-*is* the structural verification. Expect, in order: `SET` · `BEGIN` · `set_config` · `DO` · `DO` ·
-`INSERT 0 236` · `NOTICE … v7 syncope md5 = …` · `DO` · `COMMIT`, then three result tables.
-
-The one thing a human must actually read:
-
-| check | expected |
-|---|---|
-| **v7 md5** (NOTICE + `v7_syncope_md5` column) | **`8c73daf316210e278a1f1a67e48454ab`** — from 2b's dry run. A different value means a different change; **stop** |
-| version table | `v1: 38`, `v5: 236`, `v6: 236`, `v7: 236` |
-| `ib_block` rows | the three criteria each reading `… ruled out …`, and no `or correlated with symptoms` |
-
-> [!warning] Gate — stop here and look before continuing
-> After this point v7 exists but is unreferenced, so rollback is still free. Once script 2 runs,
-> new UR runs use v7. Do not chain the two commands.
-
-**3 — cut over.**
-
-```bash
-psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db \
-  -f packages/rcm/ur/scripts/bump_conditions_version_v6_to_v7.sql
-```
-
-Expect `NOTICE: qhe4200: utilization-review now on guideline corpus v7`, then a resolution table
-that should list exactly one row — `utilization-review | 7 | pinned`. Any row reading
-`DYNAMIC — follows newest corpus` on this cluster would contradict 2a; investigate.
-
-**4 — record.** Fill the rung-1 row of the promotion log in `packages/rcm/ur/CHANGELOG.md`
-(v7 installed / cut over), and `unset PGPASSWORD`.
-
-**Rollback**, either half:
-
-```bash
-# undo the cutover -- new runs go back to v6 immediately; in-flight runs keep
-# whatever version they resolved at ur-get-guidelines, so no drain is needed
-psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db -c \
-  "UPDATE workflows.composer_metadata
-      SET temporal_config = jsonb_set(temporal_config,'{conditions_version}','6'::jsonb),
-          updated_at = timezone('UTC', now())
-    WHERE workflow_code='utilization-review' AND is_deleted=false;"
-
-# then, only after confirming the version reads 6, retire the rows (reversible)
-psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db -c \
-  "UPDATE workflows.guidelines
-      SET is_deleted = true, deleted_at = timezone('UTC', now())
-    WHERE version = 7 AND is_deleted = false;"
-```
-
-### Step 3 — test clinical
-
-Mechanism only; clinical has no volume for a metrics judgement.
+### Step 4 — test clinical
 
 - [ ] one syncope encounter through UR
 - [ ] UI Severity of Illness → Met Criteria reads `I.B.1. … Seizure ruled out …`
-- [ ] `result_json._provenance.guidelines_version` = 7
+- [ ] `_provenance.guidelines_version` still reports **6** — expected, and exactly why the date
+      matters
 
-### Step 4 — staging · `qh-staging-customer-qhai` — the real gate
+### Step 5 — staging · the measurement gate
 
-Same runbook, then the backtest.
+- [ ] apply (same runbook)
+- [ ] re-run the syncope cohort, diff against the Step 2 baseline
+- [ ] zero movement outside the cohort
+- [ ] eval report + changelog
 
-- [ ] scripts applied + structural checks pass
-- [ ] re-run the syncope cohort under v7; diff per encounter against v6:
-      `I.B.1/.2/.3 criterion_met`, `overall_criteria_met`, `overall_ai_classification`,
-      `in_patient_confidence`
-- [ ] **zero** movement outside the syncope cohort — nothing else in the corpus changed, so any
-      movement there means the copy was not clean
-- [ ] expected direction: dropping `or correlated with symptoms` should make `I.B.2` harder to
-      mark met where hypoglycemia was symptomatic. If nothing moves at all, the model was
-      ignoring the contradictory clause and the change is display-only — record that
-- [ ] two artifacts: eval report + changelog, per `docs/EVALUATION.md`
-
-### Step 5 — production
+### Step 6 — production
 
 - [ ] **scope decided** (utmb only, or + mercy-stlouis + uthscsa)
 - [ ] `qh-prod-customer-utmb`, low-volume window
-- [ ] re-run the HAR from the Slack thread; confirm the UI wording
-- [ ] watch the syncope cohort 48h against the stage-4 prediction
-- [ ] rollback trigger: material divergence → `conditions_version` back to 6
-- [ ] close QHE-4200 noting both issues addressed, and that I.B.3 went beyond ticket scope
+- [ ] re-run the reported HAR; confirm the UI wording
+- [ ] watch the cohort 48h; rollback trigger = material divergence from Step 5
+- [ ] close QHE-4200, noting I.B.3 went beyond ticket scope
 
 ## Log
 
@@ -855,3 +636,15 @@ Same runbook, then the backtest.
   (commit `b4a0b2e`) alongside the v6 source hash, since the rewrite is deterministic and all five
   target clusters share the v6 source byte-for-byte — a cluster printing a different v7 md5 did not
   apply the same change.
+- **2026-09-17** — **Plan changed to an in-place amendment of v6**; both v7 scripts deleted,
+  replaced by `v6_ib_ruled_out_inplace.sql` (commit `f81a646`, PR #6310, title and body updated).
+  In place removes the three hazards the v7 route had to carry — the `utilization-review-guidelines`
+  split state on staging-qhai, the `conditions_version = NULL` auto-followers, and non-contiguous
+  version numbering — because the text every workflow already reads is the text that changes. It
+  also allows genuine idempotency: the `UPDATE` is keyed on the pre-change md5, so a re-run is a
+  clean no-op rather than a refusal. Both fingerprints are now **asserted**, not documented.
+  Cost: provenance reports `guidelines_version = 6` on both sides, so the backtest baseline must be
+  exported **before** anything is applied — that is now step 2 and it gates the rest. Validated
+  locally across five scenarios. Changelog trimmed twice at the user's request (`092ba87`,
+  `39cc851`) and now ends at the diff; rationale lives in the script header. Note §3–§7 rewritten
+  to match.
