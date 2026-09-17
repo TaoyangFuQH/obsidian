@@ -135,9 +135,11 @@ could latch onto without ever having been validated for that tenant.
 > not chased down. All 236 v6 guideline rows belong to `utilization-review`, so the install
 > script's `composer_metadata_id` passthrough is correct either way.
 >
-> **Fix before step 4:** add a guard to the cutover script that lists every
-> `workflow_code LIKE '%utilization%'` row and aborts if any *other* one is pinned at 6 or is
-> null, forcing an explicit decision instead of a silent split. Failing loudly is the point.
+> **Fixed 2026-09-17** in commit `9a10492` (PR #6310), two guards:
+> - **install script** refuses to run while any `%utilization%` workflow has `conditions_version =
+>   NULL`; takes `-v allow_dynamic_followers=1` to proceed once decided
+> - **cutover script** aborts if any *other* `%utilization%` workflow is pinned at 6. No override —
+>   a corpus split between two workflows serving the same screen is never intended
 
 ### Clusters with a guidelines table but no UR workflow
 
@@ -731,3 +733,13 @@ Same runbook, then the backtest.
   neither CI gate applies: `migration-check.yml` watches only
   `services/{api,qh-proxy,qh-apps-proxy}/migrations/versions/**`, and `check_phi_added_lines.py`
   scans added Python lines only.
+- **2026-09-17** — Re-swept all 33 customer clusters matching `workflow_code LIKE '%utilization%'`
+  instead of the exact string; found two sibling workflows the first pass missed
+  (`utilization-review-guidelines`, `utilization-review-ios`) and, with them, a silent split-state
+  bug in the cutover script. Added both guards, commit `9a10492`, pushed to PR #6310.
+  **Validated the scripts end-to-end against a throwaway local PostgreSQL 15** with the real table
+  shapes and a 236-row fixture corpus — seven scenarios, all passing (clean install; re-run
+  refused; cutover; null sibling refused with rollback leaving 0 v7 rows; null sibling accepted
+  under override; sibling pinned at 6 refused with cv left at 6; sibling repinned then cutover
+  clean). Confirmed the reworded I.B. block character-for-character in the resulting v7 row.
+  Still not run against any real cluster. PR body's Testing section updated to match.
