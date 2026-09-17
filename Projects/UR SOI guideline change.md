@@ -48,6 +48,46 @@ Read-only sweep of all 33 customer clusters across 4 environments, 2026-09-17.
 `live` = `temporal_config.conditions_version` on `composer_metadata` where
 `workflow_code = 'utilization-review'`.
 
+### Every cluster, by environment
+
+Full GKE inventory, `gcloud container clusters list` per project, 2026-09-17. **37 clusters across
+4 environments.** All are private-endpoint with master authorized networks restricted to the
+Tailscale range `100.64.0.0/10`.
+
+**`qh-production`** — 22 customer + 1 platform
+```
+qh-production-platform
+qh-prod-customer-{atria, chn, emory, emory-eu, jefferson, lcmc, mercy-stlouis,
+                  nychhc, penn-medicine, qhai, qhai-org, sanfordhealth,
+                  university-rochester, urmc, utmb, utsouthwestern,
+                  ut-austin, ut-md-anderson, ut-rgv, ut-tyler,
+                  uthouston, uthscsa}
+```
+
+**`qh-clinical`** — 8 customer + 1 platform
+```
+qh-clinical-platform
+qh-clinical-customer-{chn, emory, mercy-stlouis, penn-medicine, qhai,
+                      urmc, uthscsa, utmb}
+```
+
+**`qh-staging`** — 2 customer + 1 platform · **`qh-development`** — 1 customer + 1 platform
+```
+qh-staging-platform      qh-staging-customer-{mercy-stlouis, qhai}
+qh-dev-platform          qh-dev-customer-qhai
+```
+
+Notes that matter for this change:
+
+- **UTMB exists in clinical *and* production, but only the production one runs UR.** There is **no
+  staging utmb cluster at all** — hence the qhai-based ladder.
+- The UT system is split fine-grained in production only: `utmb`, `uthscsa`, `uthouston`,
+  `ut-austin`, `ut-rgv`, `ut-tyler`, `ut-md-anderson`, `utsouthwestern`. "UTSA" is `uthscsa`.
+- `mercy-stlouis` is the only customer besides `qhai` with a staging cluster.
+- Guidelines live in **customer** clusters only; the `*-platform` clusters have no `mvp_db`.
+- A default `gcloud container clusters get-credentials` writes the **public** master IP into
+  kubeconfig and every kubectl call then hangs. Always pass `--internal-ip`.
+
 ### Clusters that actually run UR
 
 Re-verified per cluster 2026-09-17, matching `workflow_code LIKE '%utilization%'` (an earlier
