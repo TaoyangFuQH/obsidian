@@ -189,6 +189,59 @@ Every numbered criterion must state its own polarity: `ruled out`, `Suspected`, 
 the guardrail to put in guideline-authoring guidance — it generalises, whereas "don't split"
 would forbid two patterns that are already correct.
 
+### The check — re-runnable lint
+
+Verified against prod-utmb 2026-09-17: returns exactly 3 conditions / 12 child rows. Run it on
+any UR cluster after authoring or importing guidelines; it resolves the live version itself, so
+it needs no editing between clusters or corpus versions.
+
+```sql
+-- Guideline lint: exclusion-framed criteria that split into numbered children.
+-- Each child returned must state its own polarity ("ruled out" / "Suspected" /
+-- a test name). A bare diagnosis noun is the defect -- see QHE-4200.
+WITH live AS (
+    SELECT (temporal_config ->> 'conditions_version')::int AS v
+      FROM workflows.composer_metadata
+     WHERE workflow_code = 'utilization-review' AND is_deleted = false
+), g AS (
+    SELECT condition, guideline
+      FROM workflows.guidelines, live
+     WHERE is_deleted = false AND version = live.v
+), ln AS (
+    SELECT condition,
+           regexp_replace(line, '^[[:space:]]*[-*][[:space:]]*', '') AS line
+      FROM g, regexp_split_to_table(g.guideline, E'\n') AS line
+), parent AS (
+    SELECT condition,
+           (regexp_match(line, '^\*\*([IVX]+\.[A-Z])\.\*\*'))[1] AS num,
+           line AS parent_text
+      FROM ln
+     WHERE line ~ '^\*\*[IVX]+\.[A-Z]\.\*\*'
+       AND line ~* 'exclud|ruled out|rule out|ruling out|mimic|alternative (diagnos|etiolog|primary)'
+)
+SELECT p.condition,
+       p.num                   AS parent,
+       left(p.parent_text, 70) AS parent_text,
+       left(c.line, 80)        AS child_text
+  FROM parent p
+  JOIN ln c
+    ON c.condition = p.condition
+   AND c.line ~ ('^\*\*' || replace(p.num, '.', '\.') || '\.[0-9]')
+ ORDER BY p.condition, c.line;
+```
+
+Expected output on v6 — anything beyond these three is a new offender to triage:
+
+| condition | parent | children polarity |
+|---|---|---|
+| `CHEST PAIN WITH NEGATIVE TROPONIN BUT RISK FACTORS` | `V.A.` | ✅ all `Suspected …` |
+| `FAINTING EPISODE REQUIRING HOSPITALIZATION` | `I.B.` | ❌ bare nouns — fixed by v7 |
+| `HYPERTENSIVE URGENCY` | `I.B.` | ✅ test names |
+
+It deliberately does **not** try to judge polarity automatically — "is this text a bare
+diagnosis noun" is a clinical reading, not a regex. The lint narrows 236 guidelines to a
+handful of blocks a human can eyeball in a minute.
+
 Worth noting the corpus already contains the *inline* alternative, which is equally safe and
 needs no child criteria at all — `SYNCOPE WITH ABNORMAL ECG` I.C.:
 `Non-syncopal mimics reasonably excluded (e.g., seizure with postictal state > 5 minutes,
@@ -330,7 +383,7 @@ There is **no cross-tenant batch** — each customer cluster is its own Cloud SQ
 ```
 packages/rcm/ur/scripts/qhe4200_v6_to_v7_guidelines.sql       # step 1 — install v7
 packages/rcm/ur/scripts/qhe4200_bump_conditions_version.sql   # step 2 — cut over
-packages/rcm/ur/GUIDELINES_CHANGELOG.md                       # corpus version history
+packages/rcm/ur/CHANGELOG.md                                  # guideline corpus version history
 ```
 
 Conventions to follow — precedent is `packages/rcm/clinical_coding/dag/migrate_v0_to_v1.sql`:
@@ -339,9 +392,9 @@ comment carrying usage + rollback. `packages/rcm/ur/scripts/` does not exist yet
 clinical-coding precedent puts SQL under the package's `dag/`, which is the wrong noun here,
 so a new `scripts/` dir is the better home.
 
-Changelog named `GUIDELINES_CHANGELOG.md`, **not** `CHANGELOG.md` — every other package uses
-that name for Python code history. This one tracks a database corpus, and conflating the two
-would mislead.
+Changelog at `packages/rcm/ur/CHANGELOG.md`. Other packages use that filename for Python code
+history; here it tracks the **guideline corpus**, which is a database artifact. The file says so
+in its header. If this package ever needs a code changelog too, split them at that point.
 
 ### 6.3 Script 1 — install v7
 
