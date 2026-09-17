@@ -88,6 +88,43 @@ Notes that matter for this change:
 - A default `gcloud container clusters get-credentials` writes the **public** master IP into
   kubeconfig and every kubectl call then hangs. Always pass `--internal-ip`.
 
+### Where the script runs — 5 clusters of 37
+
+| | count | run the script? |
+|---|---|---|
+| **Platform clusters** — `qh-{production,clinical,staging,dev}-platform` | 4 | ❌ **no** |
+| Customer clusters reading v6 | 5 | ✅ **yes** |
+| Customer clusters with UR but never given v6 — `prod-emory`, `prod-qhai` | 2 | ❌ no |
+| Customer cluster on v5 — `qh-dev-customer-qhai` | 1 | ❌ no |
+| Customer clusters with no `utilization-review` workflow at all | 25 | ❌ no |
+
+**Platform clusters carry no guideline data — verified 2026-09-17, not inferred.**
+`qh-clinical-platform` and `qh-production-platform` run the `mvp` app but have **zero**
+`mvp-proxy` and **zero** `mvp-cloudsqlproxy` pods, so there is no path to an `mvp_db` from them.
+`workflows.guidelines` exists only behind `mvp-proxy` in customer clusters.
+
+The five targets:
+
+| env | cluster | syncope-related UR runs | UR runs total | last 30d |
+|---|---|---|---|---|
+| clinical | `qh-clinical-customer-qhai` | **489** | 85,808 | 5,817 |
+| staging | `qh-staging-customer-qhai` | **385** | 134,906 | 107,980 |
+| production | `qh-prod-customer-utmb` | **4,308** | 520,918 | 112,110 |
+| production | `qh-prod-customer-mercy-stlouis` | not measured | — | — |
+| production | `qh-prod-customer-uthscsa` | not measured | — | — |
+
+> [!note] Correction to an earlier assumption in this note
+> §5 previously said clinical lacks the volume to measure anything, so staging had to be the
+> measurement gate. The counts say otherwise: **clinical-qhai's syncope cohort (489) is slightly
+> larger than staging's (385)**, and both are an order of magnitude below prod-utmb's 4,308. So the
+> measurement can happen at rung 1; staging becomes a second confirmation on a
+> higher-throughput environment rather than the first place anything is measurable. The real cohort
+> scale only exists in production.
+
+**Running it on the wrong cluster is safe.** The guard requires exactly one live v6 syncope row;
+everywhere else that count is 0 and the script aborts before touching anything. Verified locally
+(scenario T4).
+
 ### Clusters that actually run UR
 
 Re-verified per cluster 2026-09-17, matching `workflow_code LIKE '%utilization%'` (an earlier
@@ -519,62 +556,91 @@ PR description leads with this.
 - [ ] Where do the per-cluster applied dates live, now that the changelog no longer carries a
       promotion log? Provenance reports 6 on both sides, so that date is a real discriminator.
 
-## 7. Next steps — ordered checklist
+## 7. Next steps
 
-**Step 1 done** (PR [#6310](https://github.com/Qualified-Health/qh-platform/pull/6310)).
-Pre-flight and a dry run of the *v7* script both passed on clinical-qhai — that is where the two
+**Step 1 done** (PR [#6310](https://github.com/Qualified-Health/qh-platform/pull/6310), 7 commits).
+Pre-flight and a dry run of the superseded *v7* script passed on clinical-qhai — that is where both
 fingerprints came from — but **the in-place script has not been run against any cluster.**
+
+Runs on **5 clusters only**; see §2. Platform clusters are not targets.
 
 ### Step 1 — branch, files, commit, PR · ✅ done
 
-- [x] worktree + branch `QHE-4200-ur-soi-ib-ruled-out` off `develop`
-- [x] script + changelog under `packages/rcm/ur/`
-- [x] PR against `develop`, description leading with "merging does not change any environment"
-- [x] v7 approach replaced by in-place (commit `f81a646`), PR title and body updated
-- [x] changelog trimmed to ticket / PR / script / scope / diff (commits `092ba87`, `39cc851`)
+- [x] branch `QHE-4200-ur-soi-ib-ruled-out` off `develop`; script + changelog under `packages/rcm/ur/`
+- [x] PR against `develop`, leading with "merging does not change any environment"
+- [x] v7 pair replaced by the single in-place script (`f81a646`); PR title and body updated
+- [x] changelog trimmed to ticket / PR / script / scope / diff (`092ba87`, `39cc851`)
+- [x] script trimmed 213 → 146 lines (`c9ffbc0`)
 
-### Step 2 — export the backtest baseline · ⬅ next, and it gates everything after
+### Step 2 — export the baseline · ⬅ next, and it gates everything after
 
-- [ ] identify the syncope cohort on staging (primary or secondary condition =
-      `FAINTING EPISODE REQUIRING HOSPITALIZATION`)
-- [ ] export per-encounter `I.B.1/.2/.3 criterion_met`, `overall_criteria_met`,
-      `overall_ai_classification`, `in_patient_confidence`
-- [ ] store it somewhere durable — **local only**, it carries encounter ids
+No second version exists after an in-place edit, so the "before" state must be captured first.
 
-There is no second version to diff against after the edit. This is not optional.
+- [ ] export from **both** `clinical-qhai` (489 runs) and `staging-qhai` (385)
+- [ ] per encounter: encounter id · `I.B.1/.2/.3 criterion_met` ·
+      `overall_criteria_met` · `met_status` · `threshold` · `overall_ai_classification` ·
+      `in_patient_confidence` · plus the LOS and IoS reports as a **control** (neither should move)
+- [ ] **exclude** `report`, `citations`, `source_quote` — verbatim note text, i.e. PHI. Encounter
+      ids are fine and are the join key
+- [ ] local only — not git, not GCS
 
-### Step 3 — clinical · `qh-clinical-customer-qhai`
+### Step 3 — apply on clinical-qhai
 
-- [ ] `get-credentials … --internal-ip`
-- [ ] creds from the `mvp-db` secret (user here: `qhai-com-postgres`)
+- [ ] `get-credentials … --internal-ip`; creds from the `mvp-db` secret (user `qhai-com-postgres`)
 - [ ] port-forward `svc/mvp-cloudsqlproxy 5433:5432`
-- [ ] **dry run** — `sed 's/^COMMIT;/ROLLBACK;/'` piped into psql; expect `UPDATE 1` + success
-      `NOTICE`, then `ROLLBACK`. Tail SELECTs show the *unamended* text — expected
-- [ ] apply for real; a clean exit is the verification (the script asserts the result md5)
+- [ ] **dry run** — `sed 's/^COMMIT;/ROLLBACK;/'`; expect `UPDATE 1` + success `NOTICE` + `ROLLBACK`,
+      and the tail SELECT showing the *unamended* text
+- [ ] apply for real; a clean exit is the verification — the script asserts the result md5
 - [ ] confirm `md5(guideline)` = `8c73daf316210e278a1f1a67e48454ab`
-- [ ] record the date against this cluster (no promotion log in the changelog any more — see §6.4)
+- [ ] record the applied date for this cluster (§6.4 — no promotion log in the changelog any more)
 
-### Step 4 — test clinical
+### Step 4 — verify clinical, two things
 
-- [ ] one syncope encounter through UR
-- [ ] UI Severity of Illness → Met Criteria reads `I.B.1. … Seizure ruled out …`
-- [ ] `_provenance.guidelines_version` still reports **6** — expected, and exactly why the date
-      matters
+- [ ] **UI**: one syncope encounter through UR; Met Criteria reads `I.B.1. … Seizure ruled out …`
+- [ ] **measurement**: re-run the 489-encounter cohort, diff per encounter against the Step 2
+      baseline. This is now possible at rung 1 — see the correction in §2
+- [ ] `_provenance.guidelines_version` still reports **6** — expected, and exactly why the applied
+      date matters
 
-### Step 5 — staging · the measurement gate
+### Step 5 — apply on staging-qhai + second measurement
 
-- [ ] apply (same runbook)
-- [ ] re-run the syncope cohort, diff against the Step 2 baseline
-- [ ] zero movement outside the cohort
-- [ ] eval report + changelog
+- [ ] same runbook; re-run the 385-encounter cohort against its baseline
+- [ ] **zero** movement outside the syncope cohort — nothing else in the corpus changed
+- [ ] additional check unique to this cluster: `utilization-review-guidelines` is also pinned at 6,
+      so confirm its output moves too. The v7 route would have left it on the old corpus
+- [ ] two artifacts: eval report + changelog, per `docs/EVALUATION.md`
 
-### Step 6 — production
+### Step 6 — scope decision · blocks production
 
-- [ ] **scope decided** (utmb only, or + mercy-stlouis + uthscsa)
-- [ ] `qh-prod-customer-utmb`, low-volume window
-- [ ] re-run the reported HAR; confirm the UI wording
-- [ ] watch the cohort 48h; rollback trigger = material divergence from Step 5
-- [ ] close QHE-4200, noting I.B.3 went beyond ticket scope
+- [ ] utmb only, or also `prod-mercy-stlouis` and `prod-uthscsa`? All three read the same v6 and
+      carry the identical defect; QHE-4200 is labelled `client:utmb` only
+- [ ] does UTMB need to sign off on a clinical-criteria wording change?
+
+### Step 7 — apply on prod-utmb
+
+- [ ] low-volume window
+- [ ] re-run the HAR from the Slack thread; confirm the UI wording
+- [ ] watch the 4,308-encounter cohort for 48h against the Step 4/5 prediction — **this is the only
+      rung with real cohort scale**
+- [ ] rollback trigger: material divergence → reverse `UPDATE` (script header)
+
+### Step 8 — remaining production tenants, if scoped in
+
+- [ ] `prod-mercy-stlouis`, `prod-uthscsa` — same runbook, same verification
+
+### Step 9 — close out
+
+- [ ] per-cluster applied dates recorded somewhere durable
+- [ ] eval report + changelog published per `docs/EVALUATION.md`
+- [ ] QHE-4200 closed, noting I.B.3 went beyond the ticket's stated scope, and that both reported
+      issues are addressed
+
+### Expected result, so it is on record before measuring
+
+Dropping `or correlated with symptoms` should make `I.B.2` **harder** to mark met where hypoglycemia
+was symptomatic, so some encounters lose a met criterion and a few may change classification.
+**If nothing moves at all, the model was ignoring the contradictory clause and this change is
+display-only** — a legitimate finding, not a failed rollout. Write it down either way.
 
 ## Log
 
