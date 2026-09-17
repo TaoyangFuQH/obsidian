@@ -129,23 +129,28 @@ per cluster — look it up, don't hardcode).
 ```markdown
 - **I.B.** Alternative diagnoses reasonably excluded by initial evaluation, including:
   - **I.B.1.** Seizure ruled out (no postictal confusion lasting > 5 minutes, no tongue biting, no focal neurologic deficit).
-  - **I.B.2.** Hypoglycemia ruled out (point-of-care [POC] glucose ≥ 70 mg/dL at time of evaluation).
+  - **I.B.2.** Hypoglycemia ruled out (point-of-care glucose ≥ 70 mg/dL at time of evaluation).
   - **I.B.3.** Intoxication or pharmacologic sedation ruled out as sole cause.
 ```
 
-Diff: **+ "ruled out" ×3**, **− "or correlated with symptoms"**. Nothing else in the corpus changes.
+Diff: **+ "ruled out" ×3**, **− "or correlated with symptoms"** on I.B.2. Nothing else in
+the corpus changes.
 
-### Deviations from the ticket, for review
+### Deviations from the ticket
 
-| | ticket text | proposed | why |
+| | ticket text | applied | why |
 |---|---|---|---|
-| I.B.1 | `... (no postictal confusion > 5 min, no tongue biting, no focal deficit)` | keeps `lasting > 5 minutes` / `focal neurologic deficit` | v6 house style spells units and clinical terms out; keeps the diff to the two words that matter |
-| I.B.2 | `(POC glucose ≥ 70 mg/dL at evaluation)` | `(point-of-care [POC] glucose ≥ 70 mg/dL at time of evaluation)` | v6 expands every abbreviation on first use (`electrocardiogram (ECG)`, `Transient Ischemic Attack`) |
-| I.B.3 | *not in ticket* | **added** | same block, same parent-heading dependency, same misread. Leaving it is the only remaining ambiguous criterion in the guideline — it would look like an oversight |
+| I.B.1 | `... (no postictal confusion > 5 min, no tongue biting, no focal deficit)` | v6 parenthetical kept verbatim | the ticket paraphrased loosely (`> 5 min`, `focal deficit`); keeping v6's wording means the only edit is the two added words |
+| I.B.2 | `Hypoglycemia ruled out (POC glucose ≥ 70 mg/dL at evaluation).` | `Hypoglycemia ruled out (point-of-care glucose ≥ 70 mg/dL at time of evaluation).` | same — v6's `point-of-care` / `at time of evaluation` retained. `POC` is never reused in this guideline and it uses parens `(TLOC)`, `(ECG)`, `(BMP)` with zero square brackets, so no abbreviation is introduced |
+| I.B.3 | *not in ticket* | **added** — `Intoxication or pharmacologic sedation ruled out as sole cause.` | same block, same parent-heading dependency, same misread; leaving it would be the only ambiguous criterion left in the guideline |
 
-If Harvineet/Jim want the ticket text literally, use it — the semantics are identical and
-the decision is theirs. Flag the I.B.2 clause deletion explicitly either way: it is a
-substantive narrowing, not just wording.
+Both ticket issues are addressed: **+ "ruled out"** fixes issue 2 (exclusion read as a
+positive finding); **− "or correlated with symptoms"** fixes issue 1 (the self-contradicting
+threshold — the half after `or` described hypoglycemia as the confirmed cause, contradicting
+the `≥ 70 mg/dL` in the same parenthetical).
+
+The clause deletion is a **substantive narrowing, not a wording tweak** — call it out
+explicitly for Harvineet/Jim rather than letting it ride as part of a "rewording" ticket.
 
 ### Scope check — this pattern is rare
 
@@ -220,7 +225,9 @@ rehearsals of the exact same corpus.
 - Is this **utmb-only** or **all v6 tenants**? Landing v7 only for utmb makes utmb diverge
   from mercy-stlouis and uthscsa, which run the identical v6 corpus and have the identical
   defect. A tenant-specific fix to a shared clinical corpus needs an explicit owner decision.
-- Confirm the **I.B.3 addition** and the **I.B.2 clause deletion**.
+- Confirm the **I.B.3 addition**.
+- Confirm the **`or correlated with symptoms` deletion** on I.B.2 — it is a semantic change,
+  not a rewording, and it is what actually fixes the ticket's issue 1.
 - Optional: `qh-dev-customer-qhai` (on v5) as a zero-risk mechanics dry-run first.
 
 ### Stage 1 — clinical · `qh-clinical-customer-qhai`
