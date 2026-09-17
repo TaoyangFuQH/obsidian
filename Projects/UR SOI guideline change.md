@@ -635,7 +635,8 @@ recent history is `QHE-4200: <description>`, base branch `develop`; there is no 
 
 ## 7. Next steps — ordered checklist
 
-**Step 1 is done** (PR [#6310](https://github.com/Qualified-Health/qh-platform/pull/6310)). Next up: step 2, update clinical.
+**Step 1 done. Step 2 pre-flight + dry run done (2a/2b); the live apply (2c) has not run.**
+PR (PR [#6310](https://github.com/Qualified-Health/qh-platform/pull/6310)). Next up: step 2, update clinical.
 
 Text is settled (`ruled out` x3 + the clause deletion + I.B.3), so **step 1 is unblocked now**.
 The one open decision — scope, i.e. utmb alone or all three v6 tenants — gates step 5 only, so
@@ -676,17 +677,91 @@ No CI gate touches these files (verified 2026-09-17): `migration-check.yml` watc
 Mechanics in **6.7**. Summary: no psql in the pod, so port-forward `svc/mvp-cloudsqlproxy`
 and drive from local psql.
 
-- [ ] `get-credentials … --internal-ip`
-- [ ] pre-flight: list every `workflow_code` + `conditions_version`; note any `null` (those
-      follow v7 the moment script 1 commits, before the cutover)
-- [ ] credentials from the `mvp-db` secret — the DB user is per-tenant, never hardcode it
-- [ ] port-forward `svc/mvp-cloudsqlproxy 5433:5432`
-- [ ] **dry run** — `sed 's/^COMMIT;/ROLLBACK;/'` piped into psql. Exercises every guard and
-      the INSERT, discards the result. Free; catches a drifted corpus or a pre-existing v7
+- [x] `get-credentials … --internal-ip`
+- [x] **pre-flight clean (2026-09-17)** — one UR workflow only, `utilization-review` cv=6, so
+      neither sibling guard fires here. v6 = 236 live rows, version 7 = 0 rows in any state,
+      target row `f0677828…` md5 **matches** `26dde41e09a40c637256d34e0c3674f0`, 7730 chars
+- [x] credentials from the `mvp-db` secret — user here is `qhai-com-postgres`
+- [x] port-forward `svc/mvp-cloudsqlproxy 5433:5432`
+- [x] **dry run passed (2026-09-17)** — `SET` → `BEGIN` → both guard `DO`s → `INSERT 0 236` →
+      `NOTICE … v7 syncope md5 = 8c73daf316210e278a1f1a67e48454ab` → post-assert `DO` → `ROLLBACK`.
+      Verified afterwards: version 7 rows **0**, `conditions_version` still **6**, v6 md5 unchanged.
+      The tail SELECTs return 0 rows — expected, they run outside the rolled-back transaction
 - [ ] run `v6_to_v7_guidelines.sql` — a clean exit *is* the verification (the script asserts
       236 rows, one changed guideline, three reworded criteria, and aborts otherwise)
 - [ ] run `bump_conditions_version_v6_to_v7.sql`
 - [ ] fill in the promotion-log row in `packages/rcm/ur/CHANGELOG.md`
+
+### Step 2c — the live apply on clinical-qhai
+
+Two scripts, **a human gate between them**. Preconditions already verified by 2a/2b on this
+cluster: single UR workflow pinned at 6, v6 = 236 live rows, no version-7 rows, source md5 matches.
+No `-v allow_dynamic_followers` needed here — guard 0b finds nothing and returns early.
+
+**Setup** (same as the dry run; reuse the session if the port-forward is still up)
+
+```bash
+gcloud container clusters get-credentials qh-clinical-customer-qhai \
+  --region us-central1 --project qh-clinical --internal-ip
+PGUSER=$(kubectl -n qh get secret mvp-db -o jsonpath='{.data.POSTGRES_USER}' | base64 -d)
+export PGPASSWORD=$(kubectl -n qh get secret mvp-db -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)
+kubectl -n qh port-forward svc/mvp-cloudsqlproxy 5433:5432   # own shell, leave running
+```
+
+**1 — install v7.** Inert on this cluster: nothing reads v7 until step 3 runs.
+
+```bash
+psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db \
+  -f packages/rcm/ur/scripts/v6_to_v7_guidelines.sql
+```
+
+**2 — verify.** The script asserts its own invariants and aborts on any failure, so a clean exit
+*is* the structural verification. Expect, in order: `SET` · `BEGIN` · `set_config` · `DO` · `DO` ·
+`INSERT 0 236` · `NOTICE … v7 syncope md5 = …` · `DO` · `COMMIT`, then three result tables.
+
+The one thing a human must actually read:
+
+| check | expected |
+|---|---|
+| **v7 md5** (NOTICE + `v7_syncope_md5` column) | **`8c73daf316210e278a1f1a67e48454ab`** — from 2b's dry run. A different value means a different change; **stop** |
+| version table | `v1: 38`, `v5: 236`, `v6: 236`, `v7: 236` |
+| `ib_block` rows | the three criteria each reading `… ruled out …`, and no `or correlated with symptoms` |
+
+> [!warning] Gate — stop here and look before continuing
+> After this point v7 exists but is unreferenced, so rollback is still free. Once script 2 runs,
+> new UR runs use v7. Do not chain the two commands.
+
+**3 — cut over.**
+
+```bash
+psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db \
+  -f packages/rcm/ur/scripts/bump_conditions_version_v6_to_v7.sql
+```
+
+Expect `NOTICE: qhe4200: utilization-review now on guideline corpus v7`, then a resolution table
+that should list exactly one row — `utilization-review | 7 | pinned`. Any row reading
+`DYNAMIC — follows newest corpus` on this cluster would contradict 2a; investigate.
+
+**4 — record.** Fill the rung-1 row of the promotion log in `packages/rcm/ur/CHANGELOG.md`
+(v7 installed / cut over), and `unset PGPASSWORD`.
+
+**Rollback**, either half:
+
+```bash
+# undo the cutover -- new runs go back to v6 immediately; in-flight runs keep
+# whatever version they resolved at ur-get-guidelines, so no drain is needed
+psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db -c \
+  "UPDATE workflows.composer_metadata
+      SET temporal_config = jsonb_set(temporal_config,'{conditions_version}','6'::jsonb),
+          updated_at = timezone('UTC', now())
+    WHERE workflow_code='utilization-review' AND is_deleted=false;"
+
+# then, only after confirming the version reads 6, retire the rows (reversible)
+psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db -c \
+  "UPDATE workflows.guidelines
+      SET is_deleted = true, deleted_at = timezone('UTC', now())
+    WHERE version = 7 AND is_deleted = false;"
+```
 
 ### Step 3 — test clinical
 
@@ -770,3 +845,13 @@ Same runbook, then the backtest.
   rows on clinical-qhai) and every read path filters it. The role does hold DELETE/TRUNCATE, so the
   old recipe worked; it was just irreversible at exactly the point the guidance already has to warn
   about stage confusion. Validated the full round trip locally.
+- **2026-09-17** — **Ran 2a + 2b on `qh-clinical-customer-qhai`. Nothing was committed.**
+  Pre-flight: a single UR workflow (`utilization-review`, cv=6), so neither sibling guard applies
+  on this cluster; v6 = 236 live, version 7 = 0 in any state, target md5 matches.
+  ROLLBACK dry run: all four pre-asserts and all four post-asserts passed **against the real
+  corpus** — the md5 guard's first real test — `INSERT 0 236`, then discarded. Post-checks confirm
+  version 7 = 0 rows, `conditions_version` = 6, v6 md5 unchanged.
+  **v7 fingerprint is `8c73daf316210e278a1f1a67e48454ab`**; recorded in `CHANGELOG.md`
+  (commit `b4a0b2e`) alongside the v6 source hash, since the rewrite is deterministic and all five
+  target clusters share the v6 source byte-for-byte — a cluster printing a different v7 md5 did not
+  apply the same change.
