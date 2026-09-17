@@ -50,16 +50,54 @@ Read-only sweep of all 33 customer clusters across 4 environments, 2026-09-17.
 
 ### Clusters that actually run UR
 
-| env | cluster | project | versions present | live |
+Re-verified per cluster 2026-09-17, matching `workflow_code LIKE '%utilization%'` (an earlier
+pass matched only the exact string and **missed two sibling workflows** — see the split-state
+finding below). `cv` = `temporal_config.conditions_version`.
+
+| env | cluster | UR workflow rows (cv) | guideline versions | v6 syncope md5 |
 |---|---|---|---|---|
-| clinical | `qh-clinical-customer-qhai` | qh-clinical | v1:38, v5:236, **v6:236** | **6** |
-| staging | `qh-staging-customer-qhai` | qh-staging | v0, v1, v2, v3, v4, **v6:236** | **6** |
-| production | `qh-prod-customer-utmb` | qh-production | v0, v1, v2, v3, v4, **v6:236** | **6** |
-| production | `qh-prod-customer-mercy-stlouis` | qh-production | v2, v4, **v6:236** | **6** |
-| production | `qh-prod-customer-uthscsa` | qh-production | v2, v4, v5, **v6:236** | **6** |
-| production | `qh-prod-customer-emory` | qh-production | v0, v1, **v2:476**, v3, v4 | `None` → dynamic |
-| production | `qh-prod-customer-qhai` | qh-production | v0, v1, v2, v3 | `None` → dynamic |
-| development | `qh-dev-customer-qhai` | qh-development | v0, v1, v2, v3, **v5:236** | **5** |
+| clinical | `qh-clinical-customer-qhai` | `utilization-review` (6) | v1:38, v5:236, **v6:236** | ✅ match |
+| staging | `qh-staging-customer-qhai` | `utilization-review` (6), **`utilization-review-guidelines` (6)** | v0–v4, **v6:236** | ✅ match |
+| production | `qh-prod-customer-utmb` | `utilization-review` (6), **`utilization-review-ios` (null)** | v0–v4, **v6:236** | ✅ match |
+| production | `qh-prod-customer-mercy-stlouis` | `utilization-review` (6) | v2, v4, **v6:236** | ✅ match |
+| production | `qh-prod-customer-uthscsa` | `utilization-review` (6), **`utilization-review-guidelines` (null)** | v2, v4, v5, **v6:236** | ✅ match |
+| production | `qh-prod-customer-emory` | `utilization-review` (null), `utilization-review-guidelines` (null) | v0, v1, v2:476, v3, v4 — **no v6** | n/a |
+| production | `qh-prod-customer-qhai` | `utilization-review-ios` (null), `utilization-review` (null) | v0–v3 — **no v6** | n/a |
+| development | `qh-dev-customer-qhai` | `utilization-review` (5) | v0–v3, **v5:236** | n/a |
+
+**Exactly five clusters carry the v6 corpus, and all five have the identical syncope text.**
+`prod-emory` and `prod-qhai` run UR but were never given v6; they resolve dynamically against
+their own older corpora. The install script aborts there (guard: v6 must be 236 rows), which is
+the correct outcome — do not force v7 onto them.
+
+Every other customer cluster in every environment has the unused v2 corpus seeded by the
+2025-04 migration and **no** UR workflow at all: clinical `chn`/`emory`/`mercy-stlouis`/`urmc`/
+`uthscsa`/`utmb`, staging `mercy-stlouis`, and production `atria`/`chn`/`emory-eu`/`jefferson`/
+`lcmc`/`nychhc`/`penn-medicine`/`qhai-org`/`sanfordhealth`/`university-rochester`/`urmc`/
+`ut-austin`/`ut-md-anderson`/`ut-rgv`/`ut-tyler`/`uthouston`/`utsouthwestern`. **Skip them
+deliberately** — v7 there would be dead rows that a future dynamically-resolving UR workflow
+could latch onto without ever having been validated for that tenant.
+
+> [!bug] The cutover script leaves a split state on staging-qhai and does not warn
+> `bump_conditions_version_v6_to_v7.sql` updates **only** `workflow_code = 'utilization-review'`.
+> Its guard asserts exactly one such row, which passes — and silently ignores the siblings:
+>
+> - **`staging-qhai`**: `utilization-review-guidelines` is also pinned at **6**. After the
+>   cutover it stays at 6 while `utilization-review` moves to 7. Split state, no warning.
+> - **`prod-utmb`**: `utilization-review-ios` is `null` → **auto-jumps to v7** when script 1 commits.
+> - **`prod-uthscsa`**: `utilization-review-guidelines` is `null` → same auto-jump.
+>
+> `utilization-review-guidelines` is an older composer_metadata row for the *same* product
+> surface — identical `workflow_display` ("Utilization Review") and `workflow_url`
+> (`/utilization-report`), created 2025-04-23 vs 2025-10-08 for `utilization-review`, rank 1 vs 5.
+> `workflow_run.py:472` notes it has "731 legitimate rows", so it has been used. **Whether it is
+> still live is not yet determined** — the lineage runs through `workflows.composition_id` and was
+> not chased down. All 236 v6 guideline rows belong to `utilization-review`, so the install
+> script's `composer_metadata_id` passthrough is correct either way.
+>
+> **Fix before step 4:** add a guard to the cutover script that lists every
+> `workflow_code LIKE '%utilization%'` row and aborts if any *other* one is pinned at 6 or is
+> null, forcing an explicit decision instead of a silent split. Failing loudly is the point.
 
 ### Clusters with a guidelines table but no UR workflow
 
