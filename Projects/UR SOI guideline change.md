@@ -378,7 +378,7 @@ The enabling fact: the v6 syncope text is **byte-identical on all five UR cluste
 There is **no cross-tenant batch** — each customer cluster is its own Cloud SQL instance.
 "Batch" here means one reviewed script executed N times, not one statement spanning tenants.
 
-### 6.2 Files to add (qh-platform, branch `fix/qhe-4200-ur-soi-ib-rewording`)
+### 6.2 Files to add (qh-platform, branch `QHE-4200-ur-soi-ib-ruled-out`)
 
 ```
 packages/rcm/ur/scripts/v6_to_v7_guidelines.sql       # step 1 — install v7
@@ -547,6 +547,93 @@ Neither CI gate touches these files, confirmed 2026-09-17:
 `scripts/check_phi_added_lines.py` scans **added Python lines only**. Commit convention from
 recent history is `QHE-4200: <description>`, base branch `develop`; there is no PR template.
 
+## 7. Next steps — ordered checklist
+
+**Step 1 is done** (PR [#6310](https://github.com/Qualified-Health/qh-platform/pull/6310)). Next up: step 2, update clinical.
+
+Text is settled (`ruled out` x3 + the clause deletion + I.B.3), so **step 1 is unblocked now**.
+The one open decision — scope, i.e. utmb alone or all three v6 tenants — gates step 5 only, so
+it can be chased in parallel with steps 1-4.
+
+### Step 1 — branch, files, commit, PR
+
+Branch first, off `develop`. Two naming conventions coexist in the repo (`feat/…`/`fix/…`, and
+`QHE-XXXX-…`); use the ticket-key form so Jira auto-links the branch.
+
+```bash
+git -C ~/workspace/qh-platform worktree add .worktrees/qhe-4200 \
+  -b QHE-4200-ur-soi-ib-ruled-out develop
+cd ~/workspace/qh-platform/.worktrees/qhe-4200
+mkdir -p packages/rcm/ur/scripts
+# add: scripts/v6_to_v7_guidelines.sql
+#      scripts/bump_conditions_version_v6_to_v7.sql
+#      CHANGELOG.md
+git add packages/rcm/ur/scripts packages/rcm/ur/CHANGELOG.md
+git commit -m "QHE-4200: UR SOI guideline v7 — self-contained I.B. exclusion criteria"
+git push -u origin QHE-4200-ur-soi-ib-ruled-out
+gh pr create --base develop --title "QHE-4200: UR SOI guideline v7 — self-contained I.B. exclusion criteria"
+```
+
+- [x] worktree + branch off `develop` — `.worktrees/qhe-4200`, branch `QHE-4200-ur-soi-ib-ruled-out`
+- [x] three files added under `packages/rcm/ur/`
+- [x] commit `fe08cdd` — `QHE-4200: UR SOI guideline v7 — self-contained I.B. exclusion criteria`
+- [x] PR against `develop` — [#6310](https://github.com/Qualified-Health/qh-platform/pull/6310)
+- [x] **PR description leads with "merging does not change any environment"** — see 6.8
+- [x] PR links QHE-4200 and tables the three reviewed decisions, plus the scope question for reviewers
+
+No CI gate touches these files (verified 2026-09-17): `migration-check.yml` watches only
+`services/{api,qh-proxy,qh-apps-proxy}/migrations/versions/**`, and
+`check_phi_added_lines.py` scans added **Python** lines only.
+
+### Step 2 — update clinical · `qh-clinical-customer-qhai`
+
+Mechanics in **6.7**. Summary: no psql in the pod, so port-forward `svc/mvp-cloudsqlproxy`
+and drive from local psql.
+
+- [ ] `get-credentials … --internal-ip`
+- [ ] pre-flight: list every `workflow_code` + `conditions_version`; note any `null` (those
+      follow v7 the moment script 1 commits, before the cutover)
+- [ ] credentials from the `mvp-db` secret — the DB user is per-tenant, never hardcode it
+- [ ] port-forward `svc/mvp-cloudsqlproxy 5433:5432`
+- [ ] **dry run** — `sed 's/^COMMIT;/ROLLBACK;/'` piped into psql. Exercises every guard and
+      the INSERT, discards the result. Free; catches a drifted corpus or a pre-existing v7
+- [ ] run `v6_to_v7_guidelines.sql` — a clean exit *is* the verification (the script asserts
+      236 rows, one changed guideline, three reworded criteria, and aborts otherwise)
+- [ ] run `bump_conditions_version_v6_to_v7.sql`
+- [ ] fill in the promotion-log row in `packages/rcm/ur/CHANGELOG.md`
+
+### Step 3 — test clinical
+
+Mechanism only; clinical has no volume for a metrics judgement.
+
+- [ ] one syncope encounter through UR
+- [ ] UI Severity of Illness → Met Criteria reads `I.B.1. … Seizure ruled out …`
+- [ ] `result_json._provenance.guidelines_version` = 7
+
+### Step 4 — staging · `qh-staging-customer-qhai` — the real gate
+
+Same runbook, then the backtest.
+
+- [ ] scripts applied + structural checks pass
+- [ ] re-run the syncope cohort under v7; diff per encounter against v6:
+      `I.B.1/.2/.3 criterion_met`, `overall_criteria_met`, `overall_ai_classification`,
+      `in_patient_confidence`
+- [ ] **zero** movement outside the syncope cohort — nothing else in the corpus changed, so any
+      movement there means the copy was not clean
+- [ ] expected direction: dropping `or correlated with symptoms` should make `I.B.2` harder to
+      mark met where hypoglycemia was symptomatic. If nothing moves at all, the model was
+      ignoring the contradictory clause and the change is display-only — record that
+- [ ] two artifacts: eval report + changelog, per `docs/EVALUATION.md`
+
+### Step 5 — production
+
+- [ ] **scope decided** (utmb only, or + mercy-stlouis + uthscsa)
+- [ ] `qh-prod-customer-utmb`, low-volume window
+- [ ] re-run the HAR from the Slack thread; confirm the UI wording
+- [ ] watch the syncope cohort 48h against the stage-4 prediction
+- [ ] rollback trigger: material divergence → `conditions_version` back to 6
+- [ ] close QHE-4200 noting both issues addressed, and that I.B.3 went beyond ticket scope
+
 ## Log
 
 - **2026-09-17** — Ticket read. Traced the pipeline, located the live guideline text, confirmed
@@ -558,4 +645,11 @@ recent history is `QHE-4200: <description>`, base branch `develop`; there is no 
 - Unrelated but observed: a `mvp-proxy` replica is stuck in `Init:CrashLoopBackOff`
   (~47 restarts, ~3h40m, init container `db-migrations`) in most clinical/staging/prod
   clusters. Flagged separately; would block any migration-dependent deploy.
-
+- **2026-09-17** — Step 1 landed. Branch `QHE-4200-ur-soi-ib-ruled-out` off `develop`, commit
+  `fe08cdd`, PR [#6310](https://github.com/Qualified-Health/qh-platform/pull/6310) against `develop`.
+  Three files under `packages/rcm/ur/`. Structural validation only — balanced `BEGIN`/`COMMIT`, even
+  `$$` quoting, balanced string literals, `ON_ERROR_STOP` present. **The SQL has not been executed
+  anywhere.** First real validation is the ROLLBACK dry-run on clinical-qhai (step 2). Confirmed
+  neither CI gate applies: `migration-check.yml` watches only
+  `services/{api,qh-proxy,qh-apps-proxy}/migrations/versions/**`, and `check_phi_added_lines.py`
+  scans added Python lines only.
