@@ -381,8 +381,8 @@ There is **no cross-tenant batch** — each customer cluster is its own Cloud SQ
 ### 6.2 Files to add (qh-platform, branch `fix/qhe-4200-ur-soi-ib-rewording`)
 
 ```
-packages/rcm/ur/scripts/qhe4200_v6_to_v7_guidelines.sql       # step 1 — install v7
-packages/rcm/ur/scripts/qhe4200_bump_conditions_version.sql   # step 2 — cut over
+packages/rcm/ur/scripts/v6_to_v7_guidelines.sql       # step 1 — install v7
+packages/rcm/ur/scripts/bump_conditions_version_v6_to_v7.sql   # step 2 — cut over
 packages/rcm/ur/CHANGELOG.md                                  # guideline corpus version history
 ```
 
@@ -467,6 +467,85 @@ Then stages 4–5 of the promotion log (mercy-stlouis, uthscsa) **only if §5 St
 - [ ] Does UTMB need to sign off on a clinical-criteria wording change?
 - [ ] Is `7` free on every target cluster? Numbering is not contiguous (prod-utmb has 0-4 and 6;
       clinical-qhai has 1, 5, 6), so `max + 1` is not a safe assumption.
+
+### 6.7 Verified runbook — how to actually execute against a cluster
+
+Every command below was exercised read-only against `qh-clinical-customer-qhai` on 2026-09-17.
+
+**The scripts must run in local `psql`, not in a pod.** `mvp-proxy` has Python but **no psql**
+(`command -v psql` → nothing), and the scripts use the psql meta-command
+`\set ON_ERROR_STOP on`, which psycopg2 cannot execute. So: port-forward the Cloud SQL proxy and
+drive it from the laptop. Local psql is 15.18, server is 15.17 — same major, no client/server
+mismatch.
+
+```bash
+# 0. target the cluster.  --internal-ip is MANDATORY: without it kubeconfig gets the
+#    public master IP and every kubectl call hangs (authorized networks = Tailscale only).
+gcloud container clusters get-credentials qh-clinical-customer-qhai \
+  --region us-central1 --project qh-clinical --internal-ip
+
+# 1. PRE-FLIGHT: which workflows resolve their version dynamically?  Any row showing
+#    null here will jump to v7 the instant script 1 commits -- before the cutover.
+kubectl -n qh exec -i \
+  "$(kubectl -n qh get pods --field-selector=status.phase=Running -o name \
+       | grep -m1 mvp-proxy | cut -d/ -f2)" -c mvp-proxy -- \
+  python3 -c 'import os,psycopg2;c=psycopg2.connect(host=os.environ["DB_HOST"],port=os.environ["DB_PORT"],user=os.environ["POSTGRES_USER"],password=os.environ["POSTGRES_PASSWORD"],dbname=os.environ["POSTGRES_DB"]);c.set_session(readonly=True);u=c.cursor();u.execute("SELECT workflow_code, temporal_config->>%s FROM workflows.composer_metadata WHERE is_deleted=false ORDER BY 1",("conditions_version",));[print(r) for r in u.fetchall()]'
+
+# 2. credentials -- read from the k8s secret, never hardcode.  NOTE the DB user is
+#    per-tenant: 'qhai-com-postgres' on clinical-qhai, 'utmb-postgres' on prod-utmb.
+export PGPASSWORD=$(kubectl -n qh get secret mvp-db -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)
+PGUSER=$(kubectl -n qh get secret mvp-db -o jsonpath='{.data.POSTGRES_USER}' | base64 -d)
+
+# 3. port-forward the Cloud SQL proxy (leave running in its own shell)
+kubectl -n qh port-forward svc/mvp-cloudsqlproxy 5433:5432
+
+# 4. DRY RUN -- exercises every guard and the INSERT, then throws it away.
+#    Do this on every cluster before the real run; it is free and catches a drifted
+#    corpus or an already-present v7 without touching anything.
+sed 's/^COMMIT;/ROLLBACK;/' packages/rcm/ur/scripts/v6_to_v7_guidelines.sql \
+  | psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db
+
+# 5. for real
+psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db \
+  -f packages/rcm/ur/scripts/v6_to_v7_guidelines.sql
+
+# 6. VERIFY before cutting over -- v7 = 236 rows, one changed guideline, three
+#    criteria reworded.  The script asserts all of this itself and aborts on failure,
+#    so reaching this point clean is the verification; the tail SELECTs print the I.B. block.
+
+# 7. the cutover
+psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db \
+  -f packages/rcm/ur/scripts/bump_conditions_version_v6_to_v7.sql
+
+unset PGPASSWORD
+```
+
+Rollback, either stage:
+
+```bash
+# undo the cutover (instant, no data loss)
+psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db -c \
+  "UPDATE workflows.composer_metadata
+      SET temporal_config = jsonb_set(temporal_config,'{conditions_version}','6'::jsonb),
+          updated_at = timezone('UTC', now())
+    WHERE workflow_code='utilization-review' AND is_deleted=false;"
+
+# then, if you also want the corpus gone
+psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db -c \
+  "DELETE FROM workflows.guidelines WHERE version = 7;"
+```
+
+### 6.8 Merging the PR does not deploy this
+
+The two `.sql` files are **not** Alembic migrations — nothing runs them automatically. The PR
+makes them reviewed, versioned artifacts; applying them is the manual, per-cluster procedure in
+6.7. Say so in the PR description so no reviewer assumes merge = applied.
+
+Neither CI gate touches these files, confirmed 2026-09-17:
+`.github/workflows/migration-check.yml` only watches
+`services/{api,qh-proxy,qh-apps-proxy}/migrations/versions/**`, and
+`scripts/check_phi_added_lines.py` scans **added Python lines only**. Commit convention from
+recent history is `QHE-4200: <description>`, base branch `develop`; there is no PR template.
 
 ## Log
 
