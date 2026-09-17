@@ -495,8 +495,12 @@ Guards matter more than the INSERT here. Four pre-assertions:
 Four post-assertions: v7 has 236 rows; the three `ruled out` strings are present;
 `or correlated with symptoms` is gone; and **exactly one** guideline differs between v6 and v7.
 
-Rollback: `DELETE FROM workflows.guidelines WHERE version = 7;` — safe while
-`conditions_version` still points at 6, because nothing references v7.
+Rollback: **soft delete**, matching the schema's convention and reversible —
+`UPDATE workflows.guidelines SET is_deleted = true, deleted_at = timezone('UTC', now()) WHERE
+version = 7 AND is_deleted = false;`. Safe only while `conditions_version` still points at 6.
+Every read path filters `is_deleted`, and step 0 counts live rows only, so this both hides v7 and
+re-permits a clean re-run. Hard `DELETE` also works (the role has the privilege) but is
+irreversible — deliberate cleanup only.
 
 ### 6.4 Script 2 — cut over
 
@@ -610,9 +614,11 @@ psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db -c \
           updated_at = timezone('UTC', now())
     WHERE workflow_code='utilization-review' AND is_deleted=false;"
 
-# then, if you also want the corpus gone
+# then, if you also want the corpus retired (soft delete -- reversible)
 psql -h 127.0.0.1 -p 5433 -U "$PGUSER" -d qh_mvp_db -c \
-  "DELETE FROM workflows.guidelines WHERE version = 7;"
+  "UPDATE workflows.guidelines
+      SET is_deleted = true, deleted_at = timezone('UTC', now())
+    WHERE version = 7 AND is_deleted = false;"
 ```
 
 ### 6.8 Merging the PR does not deploy this
@@ -758,3 +764,9 @@ Same runbook, then the backtest.
   and then **removed at the user's request**, so the PR touches no `CLAUDE.md`. Those now live only
   in this note — if the guardrail should be shared with guideline authors it still needs a home in
   the repo.
+- **2026-09-17** — Rollback guidance switched from hard `DELETE` to soft delete (commit `cb88649`). Prompted by asking whether the dry run is really non-destructive: **ROLLBACK is not a
+  delete** (an uncommitted INSERT never becomes visible, so no DELETE privilege is involved) — but
+  the question surfaced that `workflows.guidelines` soft-deletes by convention (712 `is_deleted`
+  rows on clinical-qhai) and every read path filters it. The role does hold DELETE/TRUNCATE, so the
+  old recipe worked; it was just irreversible at exactly the point the guidance already has to warn
+  about stage confusion. Validated the full round trip locally.
