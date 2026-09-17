@@ -463,7 +463,7 @@ There is **no cross-tenant batch** — each customer cluster is its own Cloud SQ
 ```
 packages/rcm/ur/scripts/v6_to_v7_guidelines.sql       # step 1 — install v7
 packages/rcm/ur/scripts/bump_conditions_version_v6_to_v7.sql   # step 2 — cut over
-packages/rcm/ur/CHANGELOG.md                                  # guideline corpus version history
+packages/rcm/ur/CHANGELOG.md                                  # guideline corpus version history (terse: date/ticket/PR/diff/targets/promotion log)
 ```
 
 Conventions to follow — precedent is `packages/rcm/clinical_coding/dag/migrate_v0_to_v1.sql`:
@@ -743,3 +743,18 @@ Same runbook, then the backtest.
   under override; sibling pinned at 6 refused with cv left at 6; sibling repinned then cutover
   clean). Confirmed the reworded I.B. block character-for-character in the resulting v7 row.
   Still not run against any real cluster. PR body's Testing section updated to match.
+- **2026-09-17** — Reviewed PR #6310 feedback (automated review, no human reviewers yet;
+  verdict *approve with changes*). CI: the only real failure was **Require Jira ticket(s) in PR** —
+  `pr-jira-check.yml` requires every Jira key in the body to also appear in the title, and the body
+  cited epic QHE-3877. Reworded to name the epic without its key; now passing. The 2842
+  "vulnerabilities" in the push output are repo-wide dependabot debt on **develop**, not from this
+  PR — it adds only `.sql`/`.md`, and all five Wiz scanners pass.
+  Took three findings (commit `39b1c14`): pin `client_encoding = 'UTF8'` (the `≥` in the
+  `replace()` literals would silently no-op under another encoding), print `md5(v7 syncope)` as a
+  cross-cluster fingerprint, and split the rollback guidance by stage (the old `DELETE … version = 7`
+  read as unconditional but destroys the live corpus post-cutover). Declined "assert which
+  guideline changed" — already implied by the existing assertions. Trimmed `CHANGELOG.md` 237→84
+  lines (commit `2acffe8`); the polarity rule + lint were briefly moved to `packages/rcm/ur/CLAUDE.md`
+  and then **removed at the user's request**, so the PR touches no `CLAUDE.md`. Those now live only
+  in this note — if the guardrail should be shared with guideline authors it still needs a home in
+  the repo.
