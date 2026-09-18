@@ -642,6 +642,72 @@ was symptomatic, so some encounters lose a met criterion and a few may change cl
 **If nothing moves at all, the model was ignoring the contradictory clause and this change is
 display-only** — a legitimate finding, not a failed rollout. Write it down either way.
 
+## 8. Clinical result — applied and verified 2026-09-18
+
+**Applied** on `qh-clinical-customer-qhai` at `2026-09-18 17:00:16 UTC`. md5 moved
+`26dde41e09a40c637256d34e0c3674f0` → `8c73daf316210e278a1f1a67e48454ab`, matching the value the
+script asserts. v6 still 236 live rows, `conditions_version` still 6. The row's previous
+`updated_at` was `2026-06-09`.
+
+Test design: the same 2 curated UTMB syncope encounters fed twice — round **A** before the edit
+(suffix `-soibug-20260918-A`), round **B** after (`-B`). Baseline at
+`~/Downloads/ur_soibug_roundA_baseline.json`, local only (carries evidence text).
+
+### Verified: the display defect is fixed
+
+`report`'s first line is the guideline bullet itself, spliced in by
+`_extract_guideline_text()` in `ur_llm_activities.py` — so the corpus text reaches the UI directly
+and this check is deterministic, not dependent on model behaviour.
+
+| | round A | round B |
+|---|---|---|
+| `I.B.2` guideline line | `Hypoglycemia (… ≥ 70 mg/dL … **or correlated with symptoms**).` | `Hypoglycemia ruled out (… ≥ 70 mg/dL at time of evaluation).` |
+
+Both encounters. Issue 2 — a met criterion reading as a positive finding — is resolved.
+
+### Finding: the model was never fooled by the contradictory clause
+
+`I.B.2 criterion_met` was `True` in both rounds, and round **A**'s evidence already read
+*"Hypoglycemia excluded — glucose was 147 at evaluation, well above 70 mg/dL."* So issue 1 was a
+genuine textual defect that did not produce a wrong reading on these encounters. The fix is
+therefore display-only **in practice**, at least at this sample size. Worth stating on the ticket
+rather than implying both issues had behavioural impact.
+
+### Limitation: this design cannot measure classification impact
+
+`overall_criteria_met` moved 3 → 2 on HAR 1068923638, but the cause was **CHRONIC KIDNEY
+FAILURE** dropping 1 → 0 met — a guideline we did not touch. UTI moved 1 → 2. All three
+conditions moved; two of them cannot possibly be attributable to this change.
+
+| condition | A | B | touched? |
+|---|---|---|---|
+| CHRONIC KIDNEY FAILURE | 1/3 | 0/2 | no |
+| URINARY TRACT INFECTION (UTI) INPT | 1/3 | 2/4 | no |
+| FAINTING EPISODE (syncope) | 8/11 | 9/12 | only I.B.1–3 |
+
+So the met-flag churn (`II.C`, `II.C.3`, `III.C`, `I.B.1` appearing/disappearing) is single-draw
+LLM nondeterminism. **2 encounters × 1 draw has no power to detect a small real effect** — it is
+swamped by run-to-run variance, and we have no repeat-draw baseline to quantify that variance.
+
+Classification and confidence were unchanged on both (`in-patient` / High and Low), and the LOS and
+IoS controls were unchanged — which is the clean part of the signal.
+
+### Scope actually exercised
+
+Only **`I.B.2`**. The SOI prompt tells the model it "need not address every individual
+sub-criterion", and neither encounter produced a syncope `I.B.3`; `I.B.1` appeared only in round B
+on one encounter. **`I.B.1` and `I.B.3` are shipped unverified** — accepted deliberately.
+
+Methodology note for later rungs: `guideline_number` is **not unique across conditions** — HAR
+1068923638's `I.B.1` in round A belonged to the UTI guideline, and 1068920032's `I.B` to ACUTE
+KIDNEY FAILURE. Always key comparisons on `(condition, guideline_number)`.
+
+### Verdict
+
+Ship it. The verifiable half works and nothing attributable regressed. Do **not** cite this as
+evidence that classification is unaffected — that claim needs the prod-utmb cohort (4,308
+encounters) and a handle on sampling variance.
+
 ## Log
 
 - **2026-09-17** — Ticket read. Traced the pipeline, located the live guideline text, confirmed
@@ -714,3 +780,11 @@ display-only** — a legitimate finding, not a failed rollout. Write it down eit
   locally across five scenarios. Changelog trimmed twice at the user's request (`092ba87`,
   `39cc851`) and now ends at the diff; rationale lives in the script header. Note §3–§7 rewritten
   to match.
+- **2026-09-18** — **Applied on clinical-qhai and verified** (§8). Round A reproduced the defect
+  (`I.B.2` met with the old ambiguous text); the amendment committed at 17:00:16 UTC with the
+  asserted md5; round B shows the new `Hypoglycemia ruled out (…)` text reaching `report`. But the
+  model had already been reading the criterion correctly in round A, so the practical fix is the
+  display, and the met-flag/count movement is single-draw nondeterminism — CKD and UTI, which we
+  never touched, both moved. Only `I.B.2` was exercised; `I.B.1`/`I.B.3` ship unverified by
+  agreement. Also learned `guideline_number` collides across conditions — key on
+  `(condition, guideline_number)`.
