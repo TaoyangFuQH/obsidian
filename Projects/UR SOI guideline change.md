@@ -90,13 +90,13 @@ Notes that matter for this change:
 
 ### Where the script runs — 5 clusters of 37
 
-| | count | run the script? |
-|---|---|---|
-| **Platform clusters** — `qh-{production,clinical,staging,dev}-platform` | 4 | ❌ **no** |
-| Customer clusters reading v6 | 5 | ✅ **yes** |
-| Customer clusters with UR but never given v6 — `prod-emory`, `prod-qhai` | 2 | ❌ no |
-| Customer cluster on v5 — `qh-dev-customer-qhai` | 1 | ❌ no |
-| Customer clusters with no `utilization-review` workflow at all | 25 | ❌ no |
+|                                                                          | count | run the script? |
+| ------------------------------------------------------------------------ | ----- | --------------- |
+| **Platform clusters** — `qh-{production,clinical,staging,dev}-platform`  | 4     | ❌ **no**        |
+| Customer clusters reading v6                                             | 5     | ✅ **yes**       |
+| Customer clusters with UR but never given v6 — `prod-emory`, `prod-qhai` | 2     | ❌ no            |
+| Customer cluster on v5 — `qh-dev-customer-qhai`                          | 1     | ❌ no            |
+| Customer clusters with no `utilization-review` workflow at all           | 25    | ❌ no            |
 
 **Platform clusters carry no guideline data — verified 2026-09-17, not inferred.**
 `qh-clinical-platform` and `qh-production-platform` run the `mvp` app but have **zero**
